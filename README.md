@@ -28,7 +28,18 @@ swift run
 ```bash
 ./scripts/build_app.sh --install
 ```
-Приложение будет установлено в `/Applications/KlacApp.app`.
+Приложение будет установлено в `/Applications/Klac.app`.
+
+## Релиз в GitHub
+```bash
+./scripts/release.sh v1.0.0
+```
+Скрипт:
+- соберет `dist/Klac.app`
+- запакует `dist/Klac-v1.0.0.zip`
+- создаст git tag
+- запушит `main` и tag
+- создаст GitHub Release через `gh`
 
 При первом запуске macOS попросит выдать Accessibility-доступ:
 `System Settings -> Privacy & Security -> Accessibility`.
