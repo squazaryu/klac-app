@@ -56,11 +56,25 @@ final class KeyboardSoundService: ObservableObject {
             updateLaunchAtLogin()
         }
     }
+    @Published var dynamicCompensationEnabled = false {
+        didSet {
+            defaults.set(dynamicCompensationEnabled, forKey: Keys.dynamicCompensationEnabled)
+            updateDynamicCompensation()
+        }
+    }
+    @Published var compensationStrength: Double = 1.0 {
+        didSet {
+            defaults.set(compensationStrength, forKey: Keys.compensationStrength)
+            updateDynamicCompensation()
+        }
+    }
 
     private let soundEngine = ClickSoundEngine()
     private let eventTap = GlobalKeyEventTap()
     @Published var capturingKeyboard = false
     private let defaults = UserDefaults.standard
+    private var systemVolumeTimer: Timer?
+    private var lastSystemVolume: Double = 1.0
 
     private enum Keys {
         static let isEnabled = "settings.isEnabled"
@@ -72,6 +86,8 @@ final class KeyboardSoundService: ObservableObject {
         static let spaceLevel = "settings.spaceLevel"
         static let selectedProfile = "settings.selectedProfile"
         static let launchAtLogin = "settings.launchAtLogin"
+        static let dynamicCompensationEnabled = "settings.dynamicCompensationEnabled"
+        static let compensationStrength = "settings.compensationStrength"
     }
 
     init() {
@@ -103,6 +119,12 @@ final class KeyboardSoundService: ObservableObject {
         if defaults.object(forKey: Keys.launchAtLogin) != nil {
             launchAtLogin = defaults.bool(forKey: Keys.launchAtLogin)
         }
+        if defaults.object(forKey: Keys.dynamicCompensationEnabled) != nil {
+            dynamicCompensationEnabled = defaults.bool(forKey: Keys.dynamicCompensationEnabled)
+        }
+        if defaults.object(forKey: Keys.compensationStrength) != nil {
+            compensationStrength = defaults.double(forKey: Keys.compensationStrength)
+        }
 
         soundEngine.masterVolume = Float(volume)
         soundEngine.variation = Float(variation)
@@ -110,6 +132,8 @@ final class KeyboardSoundService: ObservableObject {
         soundEngine.releaseLevel = Float(releaseLevel)
         soundEngine.spaceLevel = Float(spaceLevel)
         soundEngine.setProfile(selectedProfile)
+        startSystemVolumeMonitoring()
+        updateDynamicCompensation()
         refreshAccessibilityStatus(promptIfNeeded: false)
 
         eventTap.onEvent = { [weak self] type, keyCode, isAutorepeat in
@@ -224,6 +248,60 @@ final class KeyboardSoundService: ObservableObject {
             }
         } catch {
             NSLog("Failed to update launch at login: \(error)")
+        }
+    }
+
+    private func startSystemVolumeMonitoring() {
+        systemVolumeTimer?.invalidate()
+        systemVolumeTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.pollSystemVolume()
+            }
+        }
+        pollSystemVolume()
+    }
+
+    private func pollSystemVolume() {
+        Task.detached(priority: .background) { [weak self] in
+            guard let self else { return }
+            let vol = Self.readSystemOutputVolume() ?? 100.0
+            let normalized = (vol / 100.0).clamped(to: 0.0 ... 1.0)
+            await MainActor.run {
+                self.lastSystemVolume = normalized
+                self.updateDynamicCompensation()
+            }
+        }
+    }
+
+    private func updateDynamicCompensation() {
+        guard dynamicCompensationEnabled else {
+            soundEngine.dynamicCompensationGain = 1.0
+            return
+        }
+        // More boost when system output is low; soft-limited in audio engine.
+        let lowVolumeFactor = max(0.0, 1.0 - lastSystemVolume)
+        let gain = 1.0 + lowVolumeFactor * compensationStrength * 1.5
+        soundEngine.dynamicCompensationGain = Float(gain).clamped(to: 1.0 ... 3.0)
+    }
+
+    nonisolated private static func readSystemOutputVolume() -> Double? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", "output volume of (get volume settings)"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let str = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  let value = Double(str) else { return nil }
+            return value
+        } catch {
+            return nil
         }
     }
 }
@@ -348,6 +426,7 @@ final class ClickSoundEngine {
     var pressLevel: Float = 1.0
     var releaseLevel: Float = 0.65
     var spaceLevel: Float = 1.1
+    var dynamicCompensationGain: Float = 1.0
 
     private struct SampleBank {
         var keyDown: [AVAudioPCMBuffer]
@@ -570,7 +649,7 @@ final class ClickSoundEngine {
 
         var gainJitter = Float.random(in: -variation ... variation) * 0.18
         if autorepeat { gainJitter -= 0.1 }
-        let gain = (masterVolume * keyLevel + gainJitter).clamped(to: 0.03 ... 1.0)
+        let gain = (masterVolume * keyLevel * dynamicCompensationGain + gainJitter).clamped(to: 0.03 ... 2.5)
         schedule(pool.randomElement(), gain: gain)
     }
 
@@ -586,7 +665,7 @@ final class ClickSoundEngine {
         case 51, 117: pool = bank.backspaceUp
         default: pool = bank.keyUp
         }
-        let gain = (masterVolume * releaseLevel + Float.random(in: -variation ... variation) * 0.08).clamped(to: 0.02 ... 0.8)
+        let gain = (masterVolume * releaseLevel * dynamicCompensationGain + Float.random(in: -variation ... variation) * 0.08).clamped(to: 0.02 ... 1.2)
         schedule(pool.randomElement(), gain: gain)
     }
 
@@ -604,7 +683,7 @@ final class ClickSoundEngine {
             guard let src = buffer.floatChannelData?[channel],
                   let dst = copy.floatChannelData?[channel] else { continue }
             for i in 0 ..< frames {
-                dst[i] = src[i] * gain
+                dst[i] = Float(tanh(Double(src[i] * gain)))
             }
         }
 

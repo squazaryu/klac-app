@@ -88,6 +88,7 @@ VERSION_NO_V="${VERSION#v}"
 BUILD_NUMBER="$(date +%Y%m%d%H%M)"
 ZIP_PATH="$ROOT_DIR/dist/Klac-${VERSION}.zip"
 APP_PATH="$ROOT_DIR/dist/Klac.app"
+BUILD_LOG="$(mktemp)"
 
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "[dry-run] Would build app for version $VERSION_NO_V (build $BUILD_NUMBER)"
@@ -100,7 +101,16 @@ if [ "$DRY_RUN" -eq 1 ]; then
   exit 0
 fi
 
-APP_VERSION="$VERSION_NO_V" BUILD_NUMBER="$BUILD_NUMBER" ./scripts/build_app.sh
+if ! APP_VERSION="$VERSION_NO_V" BUILD_NUMBER="$BUILD_NUMBER" ./scripts/build_app.sh 2>&1 | tee "$BUILD_LOG"; then
+  if grep -q "was modified during the build" "$BUILD_LOG"; then
+    echo "Detected transient Swift build race. Cleaning and retrying once..."
+    swift package clean
+    APP_VERSION="$VERSION_NO_V" BUILD_NUMBER="$BUILD_NUMBER" ./scripts/build_app.sh
+  else
+    echo "Build failed. See log above."
+    exit 1
+  fi
+fi
 
 rm -f "$ZIP_PATH"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
