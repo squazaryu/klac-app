@@ -9,6 +9,7 @@ EXEC_NAME="KlacApp"
 BUNDLE_ID="com.tumowuh.klac"
 APP_VERSION="${APP_VERSION:-1.0.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
+SWIFT_BUILD_JOBS="${SWIFT_BUILD_JOBS:-2}"
 BUILD_DIR="$ROOT_DIR/.build/release"
 DIST_DIR="$ROOT_DIR/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
@@ -19,7 +20,7 @@ ICON_PNG="$DIST_DIR/AppIcon-1024.png"
 ICONSET_DIR="$DIST_DIR/AppIcon.iconset"
 ICON_ICNS="$RES_DIR/AppIcon.icns"
 
-swift build -c release
+swift build -c release -j "$SWIFT_BUILD_JOBS"
 
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RES_DIR"

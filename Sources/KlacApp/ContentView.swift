@@ -106,6 +106,13 @@ struct ContentView: View {
                     .tint(.cyan)
                     .foregroundStyle(.white)
 
+                Toggle("Автокомпенсация по системной громкости", isOn: $service.dynamicCompensationEnabled)
+                    .tint(.cyan)
+                    .foregroundStyle(.white)
+
+                sliderRow(title: "Сила компенсации", value: $service.compensationStrength, range: 0.0 ... 2.0)
+                    .opacity(service.dynamicCompensationEnabled ? 1.0 : 0.45)
+
                 Button("Тест звука") {
                     service.playTestSound()
                 }
