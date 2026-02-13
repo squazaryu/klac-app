@@ -10,6 +10,7 @@ BUNDLE_ID="com.tumowuh.klac"
 APP_VERSION="${APP_VERSION:-1.0.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 SWIFT_BUILD_JOBS="${SWIFT_BUILD_JOBS:-2}"
+SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 DIST_DIR="$ROOT_DIR/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
@@ -83,7 +84,12 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || true
+if [ "$SIGN_IDENTITY" = "-" ]; then
+  echo "Signing with ad-hoc identity (-). TCC permissions may reset between builds."
+else
+  echo "Signing with identity: $SIGN_IDENTITY"
+fi
+codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DIR"
 
 echo "Built app: $APP_DIR"
 if [ "${1:-}" = "--install" ]; then

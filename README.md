@@ -30,6 +30,13 @@ swift run
 ```
 Приложение будет установлено в `/Applications/Klac.app`.
 
+Чтобы права `Accessibility/Input Monitoring` не сбрасывались после пересборки,
+используй стабильную подпись:
+```bash
+security find-identity -v -p codesigning
+SIGN_IDENTITY="Apple Development: YOUR_NAME (TEAMID)" ./scripts/build_app.sh --install
+```
+
 ## Релиз в GitHub
 ```bash
 ./scripts/release.sh v1.0.0
