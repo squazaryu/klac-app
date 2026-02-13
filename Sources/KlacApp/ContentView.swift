@@ -75,6 +75,9 @@ struct ContentView: View {
                     Button("Проверить доступ") {
                         service.refreshAccessibilityStatus(promptIfNeeded: true)
                     }
+                    Button("Сбросить доступ") {
+                        service.resetPrivacyPermissions()
+                    }
                     if !service.accessibilityGranted {
                         Button("Открыть настройки") {
                             service.openAccessibilitySettings()
