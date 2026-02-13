@@ -10,7 +10,6 @@ BUNDLE_ID="com.tumowuh.klac"
 APP_VERSION="${APP_VERSION:-1.0.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 SWIFT_BUILD_JOBS="${SWIFT_BUILD_JOBS:-2}"
-BUILD_DIR="$ROOT_DIR/.build/release"
 DIST_DIR="$ROOT_DIR/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
@@ -21,6 +20,7 @@ ICONSET_DIR="$DIST_DIR/AppIcon.iconset"
 ICON_ICNS="$RES_DIR/AppIcon.icns"
 
 swift build -c release -j "$SWIFT_BUILD_JOBS"
+BUILD_DIR="$(swift build -c release --show-bin-path)"
 
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RES_DIR"
@@ -28,9 +28,11 @@ mkdir -p "$MACOS_DIR" "$RES_DIR"
 cp "$BUILD_DIR/$EXEC_NAME" "$MACOS_DIR/$EXEC_NAME"
 chmod +x "$MACOS_DIR/$EXEC_NAME"
 
-if [ -d "$BUILD_DIR/KlacApp_KlacApp.bundle" ]; then
-  cp -R "$BUILD_DIR/KlacApp_KlacApp.bundle" "$RES_DIR/"
-fi
+for bundle in "$BUILD_DIR"/*.bundle; do
+  if [ -d "$bundle" ]; then
+    cp -R "$bundle" "$RES_DIR/"
+  fi
+done
 
 if [ -f "$ICON_PNG" ]; then
   rm -rf "$ICONSET_DIR"
