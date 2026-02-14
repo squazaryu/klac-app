@@ -1,6 +1,7 @@
-# Klac (macOS)
+# Клац (macOS)
 
-Klac — menu bar приложение для macOS, которое имитирует звуки механической клавиатуры при глобальном вводе.
+Клац — menu bar приложение для macOS, которое имитирует звуки механической клавиатуры при глобальном вводе.
+Проект является самостоятельным и не аффилирован с другими приложениями с похожим назначением.
 
 ## Возможности
 - Глобальный перехват `keyDown/keyUp` через `CGEventTap`.
@@ -24,35 +25,36 @@ Klac — menu bar приложение для macOS, которое имитир
 
 ## Быстрый старт (из исходников)
 ```bash
-cd "/Users/tumowuh/Projects/Klac app"
+cd "/path/to/project"
 swift build
 swift run
 ```
 
 ## Сборка и установка `.app`
 ```bash
-cd "/Users/tumowuh/Projects/Klac app"
+cd "/path/to/project"
 ./scripts/build_app.sh --install
 ```
 
 Итоговая сборка:
-- локальный артефакт: `/Users/tumowuh/Projects/Klac app/dist/Klac.app`
-- установленная копия: `/Applications/Klac.app`
+- локальный артефакт: `dist/*.app`
+- установленная копия: `/Applications/<название приложения>.app`
 
 ## Права macOS (обязательно)
 Для глобального перехвата нужны оба разрешения:
 - `Privacy & Security -> Accessibility`
 - `Privacy & Security -> Input Monitoring`
 
-После установки/обновления запускай только `/Applications/Klac.app`, чтобы не было конфликтов TCC между разными копиями приложения.
+После установки/обновления запускай только копию из `/Applications`, чтобы не было конфликтов TCC между разными копиями приложения.
 
 ## Если доступы «сломались»
 В UI есть кнопка `Сбросить доступ` (рядом с `Проверить доступ`), она запускает `tccutil reset` для текущего `bundle id`.
 
 Вручную:
 ```bash
-tccutil reset Accessibility com.tumowuh.klac
-tccutil reset ListenEvent com.tumowuh.klac
+BUNDLE_ID="$(defaults read /Applications/*.app/Contents/Info CFBundleIdentifier 2>/dev/null | head -n 1)"
+tccutil reset Accessibility "$BUNDLE_ID"
+tccutil reset ListenEvent "$BUNDLE_ID"
 ```
 
 После сброса заново выдай разрешения в системных настройках.
@@ -68,13 +70,13 @@ SIGN_IDENTITY="Apple Development: YOUR_NAME (TEAMID)" ./scripts/build_app.sh --i
 
 ## Релизы в GitHub
 ```bash
-cd "/Users/tumowuh/Projects/Klac app"
+cd "/path/to/project"
 ./scripts/release.sh v1.0.0
 ```
 
 Что делает `release.sh`:
-1. Собирает релизный `dist/Klac.app`
-2. Упаковывает `dist/Klac-vX.Y.Z.zip`
+1. Собирает релизный `.app` в `dist/`
+2. Упаковывает архив `dist/*-vX.Y.Z.zip`
 3. Создает git tag
 4. Пушит `main` и tag
 5. Создает GitHub Release через `gh` и прикладывает zip
@@ -92,8 +94,8 @@ cd "/Users/tumowuh/Projects/Klac app"
 - локальная копия лицензии: `LICENSE.third-party-keyboardsounds`
 
 ## Структура проекта
-- `Sources/KlacApp/ContentView.swift` — UI и настройки
-- `Sources/KlacApp/KeyboardSoundService.swift` — логика клавиш/аудио/TCC
-- `Sources/KlacApp/AppDelegate.swift` — menu bar статус-элемент и popover
+- `Sources/<AppTarget>/ContentView.swift` — UI и настройки
+- `Sources/<AppTarget>/KeyboardSoundService.swift` — логика клавиш/аудио/TCC
+- `Sources/<AppTarget>/AppDelegate.swift` — menu bar статус-элемент и popover
 - `scripts/build_app.sh` — сборка `.app`
 - `scripts/release.sh` — выпуск релизов в GitHub
