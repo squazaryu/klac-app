@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import ApplicationServices
+import CoreAudio
 import Foundation
 import ServiceManagement
 import UniformTypeIdentifiers
@@ -11,6 +12,7 @@ final class KeyboardSoundService: ObservableObject {
         didSet { defaults.set(isEnabled, forKey: Keys.isEnabled) }
     }
     @Published var accessibilityGranted = false
+    @Published var accessActionHint: String?
     @Published var volume: Double = 0.75 {
         didSet {
             soundEngine.masterVolume = Float(volume)
@@ -68,6 +70,40 @@ final class KeyboardSoundService: ObservableObject {
             updateDynamicCompensation()
         }
     }
+    @Published var typingAdaptiveEnabled = false {
+        didSet {
+            defaults.set(typingAdaptiveEnabled, forKey: Keys.typingAdaptiveEnabled)
+            updateTypingAdaptation()
+        }
+    }
+    @Published var typingAdaptiveStrength: Double = 0.7 {
+        didSet {
+            defaults.set(typingAdaptiveStrength, forKey: Keys.typingAdaptiveStrength)
+            updateTypingAdaptation()
+        }
+    }
+    @Published var limiterEnabled = true {
+        didSet {
+            defaults.set(limiterEnabled, forKey: Keys.limiterEnabled)
+            soundEngine.limiterEnabled = limiterEnabled
+        }
+    }
+    @Published var limiterDrive: Double = 1.2 {
+        didSet {
+            defaults.set(limiterDrive, forKey: Keys.limiterDrive)
+            soundEngine.limiterDrive = Float(limiterDrive)
+        }
+    }
+    @Published var typingCPS: Double = 0
+    @Published var typingWPM: Double = 0
+    @Published var currentOutputDeviceName = "Системное устройство"
+    @Published var currentOutputDeviceBoost: Double = 1.0 {
+        didSet {
+            saveCurrentDeviceBoost()
+            updateDynamicCompensation()
+        }
+    }
+    @Published var soundPackStatus: String?
 
     private let soundEngine = ClickSoundEngine()
     private let eventTap = GlobalKeyEventTap()
@@ -75,6 +111,10 @@ final class KeyboardSoundService: ObservableObject {
     private let defaults = UserDefaults.standard
     private var systemVolumeTimer: Timer?
     private var lastSystemVolume: Double = 1.0
+    private var lastOutputDeviceID: AudioObjectID = 0
+    private var outputDeviceBoosts: [String: Double] = [:]
+    private var currentOutputDeviceUID = ""
+    private var typingTimestamps: [CFAbsoluteTime] = []
 
     private enum Keys {
         static let isEnabled = "settings.isEnabled"
@@ -88,6 +128,11 @@ final class KeyboardSoundService: ObservableObject {
         static let launchAtLogin = "settings.launchAtLogin"
         static let dynamicCompensationEnabled = "settings.dynamicCompensationEnabled"
         static let compensationStrength = "settings.compensationStrength"
+        static let typingAdaptiveEnabled = "settings.typingAdaptiveEnabled"
+        static let typingAdaptiveStrength = "settings.typingAdaptiveStrength"
+        static let limiterEnabled = "settings.limiterEnabled"
+        static let limiterDrive = "settings.limiterDrive"
+        static let outputDeviceBoosts = "settings.outputDeviceBoosts"
     }
 
     init() {
@@ -125,21 +170,41 @@ final class KeyboardSoundService: ObservableObject {
         if defaults.object(forKey: Keys.compensationStrength) != nil {
             compensationStrength = defaults.double(forKey: Keys.compensationStrength)
         }
+        if defaults.object(forKey: Keys.typingAdaptiveEnabled) != nil {
+            typingAdaptiveEnabled = defaults.bool(forKey: Keys.typingAdaptiveEnabled)
+        }
+        if defaults.object(forKey: Keys.typingAdaptiveStrength) != nil {
+            typingAdaptiveStrength = defaults.double(forKey: Keys.typingAdaptiveStrength)
+        }
+        if defaults.object(forKey: Keys.limiterEnabled) != nil {
+            limiterEnabled = defaults.bool(forKey: Keys.limiterEnabled)
+        }
+        if defaults.object(forKey: Keys.limiterDrive) != nil {
+            limiterDrive = defaults.double(forKey: Keys.limiterDrive)
+        }
+        if let data = defaults.data(forKey: Keys.outputDeviceBoosts),
+           let decoded = try? JSONDecoder().decode([String: Double].self, from: data) {
+            outputDeviceBoosts = decoded
+        }
 
         soundEngine.masterVolume = Float(volume)
         soundEngine.variation = Float(variation)
         soundEngine.pressLevel = Float(pressLevel)
         soundEngine.releaseLevel = Float(releaseLevel)
         soundEngine.spaceLevel = Float(spaceLevel)
+        soundEngine.limiterEnabled = limiterEnabled
+        soundEngine.limiterDrive = Float(limiterDrive)
         soundEngine.setProfile(selectedProfile)
         startSystemVolumeMonitoring()
         updateDynamicCompensation()
+        updateTypingAdaptation()
         refreshAccessibilityStatus(promptIfNeeded: false)
 
         eventTap.onEvent = { [weak self] type, keyCode, isAutorepeat in
             guard let self, self.isEnabled else { return }
             if type == .down {
                 if isAutorepeat { return }
+                self.trackTypingHit()
                 self.soundEngine.playDown(for: keyCode, autorepeat: isAutorepeat)
             } else if self.playKeyUp {
                 self.soundEngine.playUp(for: keyCode)
@@ -181,6 +246,12 @@ final class KeyboardSoundService: ObservableObject {
         }
     }
 
+    func openInputMonitoringSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     func resetPrivacyPermissions() {
         guard let bundleID = Bundle.main.bundleIdentifier ??
                 (Bundle.main.object(forInfoDictionaryKey: kCFBundleIdentifierKey as String) as? String),
@@ -191,8 +262,34 @@ final class KeyboardSoundService: ObservableObject {
         runTCCReset(service: "Accessibility", bundleID: bundleID)
         runTCCReset(service: "ListenEvent", bundleID: bundleID)
         openAccessibilitySettings()
+        openInputMonitoringSettings()
+        accessActionHint = "Доступы сброшены. Выдай разрешения заново и перезапусти Klac."
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             self?.refreshAccessibilityStatus(promptIfNeeded: false)
+        }
+    }
+
+    func runAccessRecoveryWizard() {
+        resetPrivacyPermissions()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.openAccessibilitySettings()
+            self?.openInputMonitoringSettings()
+            self?.accessActionHint = "1) Включи Klac в обоих разделах. 2) Нажми Перезапустить Klac."
+        }
+    }
+
+    func restartApplication() {
+        let appURL = Bundle.main.bundleURL
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = false
+        NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, error in
+            if let error {
+                NSLog("Failed to relaunch app: \(error)")
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                NSApplication.shared.terminate(nil)
+            }
         }
     }
 
@@ -254,6 +351,41 @@ final class KeyboardSoundService: ObservableObject {
         }
     }
 
+    func importSoundPack() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.folder, .zip]
+        panel.title = "Импорт Sound Pack"
+        panel.message = "Выбери папку или zip-архив со звуками."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let destination = Self.customPackDirectory()
+        do {
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+
+            if url.pathExtension.lowercased() == "zip" {
+                try Self.unzipSoundPack(from: url, to: destination)
+            } else {
+                try Self.copyDirectoryContents(from: url, to: destination)
+            }
+
+            if soundEngine.installCustomPack(from: destination) {
+                selectedProfile = .customPack
+                soundPackStatus = "Sound Pack импортирован."
+            } else {
+                soundPackStatus = "Не удалось загрузить пак: проверь имена файлов."
+            }
+        } catch {
+            soundPackStatus = "Ошибка импорта: \(error.localizedDescription)"
+        }
+    }
+
     private func updateLaunchAtLogin() {
         do {
             if launchAtLogin {
@@ -268,7 +400,7 @@ final class KeyboardSoundService: ObservableObject {
 
     private func startSystemVolumeMonitoring() {
         systemVolumeTimer?.invalidate()
-        systemVolumeTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        systemVolumeTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.pollSystemVolume()
             }
@@ -281,8 +413,17 @@ final class KeyboardSoundService: ObservableObject {
             guard let self else { return }
             let vol = Self.readSystemOutputVolume() ?? 100.0
             let normalized = (vol / 100.0).clamped(to: 0.0 ... 1.0)
+            let deviceID = Self.readDefaultOutputDeviceID() ?? 0
+            let deviceUID = deviceID != 0 ? (Self.readOutputDeviceUID(deviceID) ?? "") : ""
+            let deviceName = deviceID != 0 ? (Self.readOutputDeviceName(deviceID) ?? "Системное устройство") : "Системное устройство"
             await MainActor.run {
                 self.lastSystemVolume = normalized
+                if deviceID != self.lastOutputDeviceID || deviceUID != self.currentOutputDeviceUID {
+                    self.lastOutputDeviceID = deviceID
+                    self.currentOutputDeviceUID = deviceUID
+                    self.currentOutputDeviceName = deviceName
+                    self.currentOutputDeviceBoost = self.outputDeviceBoosts[deviceUID] ?? 1.0
+                }
                 self.updateDynamicCompensation()
             }
         }
@@ -295,29 +436,187 @@ final class KeyboardSoundService: ObservableObject {
         }
         // More boost when system output is low; soft-limited in audio engine.
         let lowVolumeFactor = max(0.0, 1.0 - lastSystemVolume)
-        let gain = 1.0 + lowVolumeFactor * compensationStrength * 1.5
+        let gain = (1.0 + lowVolumeFactor * compensationStrength * 1.5) * currentOutputDeviceBoost
         soundEngine.dynamicCompensationGain = Float(gain).clamped(to: 1.0 ... 3.0)
     }
 
-    nonisolated private static func readSystemOutputVolume() -> Double? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", "output volume of (get volume settings)"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return nil }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            guard let str = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-                  let value = Double(str) else { return nil }
-            return value
-        } catch {
-            return nil
+    private func trackTypingHit() {
+        let now = CFAbsoluteTimeGetCurrent()
+        typingTimestamps.append(now)
+        let windowStart = now - 4.0
+        typingTimestamps.removeAll { $0 < windowStart }
+        let cps = Double(typingTimestamps.count) / 4.0
+        typingCPS = cps
+        typingWPM = cps * 12.0
+        updateTypingAdaptation()
+    }
+
+    private func updateTypingAdaptation() {
+        guard typingAdaptiveEnabled else {
+            soundEngine.typingSpeedGain = 1.0
+            return
         }
+        // Smooth gain up to +35% on fast typing.
+        let normalized = min(1.0, typingCPS / 8.0)
+        let gain = 1.0 + normalized * typingAdaptiveStrength * 0.35
+        soundEngine.typingSpeedGain = Float(gain)
+    }
+
+    private func saveCurrentDeviceBoost() {
+        guard !currentOutputDeviceUID.isEmpty else { return }
+        outputDeviceBoosts[currentOutputDeviceUID] = currentOutputDeviceBoost.clamped(to: 0.5 ... 2.0)
+        if let data = try? JSONEncoder().encode(outputDeviceBoosts) {
+            defaults.set(data, forKey: Keys.outputDeviceBoosts)
+        }
+    }
+
+    private static func customPackDirectory() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("Klac/SoundPacks/Custom", isDirectory: true)
+    }
+
+    nonisolated private static func unzipSoundPack(from zipURL: URL, to destination: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = ["-x", "-k", zipURL.path, destination.path]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw NSError(domain: "Klac", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: "ditto unzip failed"])
+        }
+    }
+
+    nonisolated private static func copyDirectoryContents(from source: URL, to destination: URL) throws {
+        let files = try FileManager.default.contentsOfDirectory(at: source, includingPropertiesForKeys: nil)
+        for file in files {
+            let target = destination.appendingPathComponent(file.lastPathComponent)
+            try FileManager.default.copyItem(at: file, to: target)
+        }
+    }
+
+    nonisolated private static func readSystemOutputVolume() -> Double? {
+        var deviceID = AudioObjectID(0)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        var defaultDeviceAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let defaultDeviceStatus = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &defaultDeviceAddress,
+            0,
+            nil,
+            &size,
+            &deviceID
+        )
+        guard defaultDeviceStatus == noErr, deviceID != 0 else { return nil }
+
+        // Try virtual master first.
+        var volume = Float32(0)
+        size = UInt32(MemoryLayout<Float32>.size)
+        var volumeAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let masterStatus = AudioObjectGetPropertyData(
+            deviceID,
+            &volumeAddress,
+            0,
+            nil,
+            &size,
+            &volume
+        )
+        if masterStatus == noErr {
+            return Double(volume * 100)
+        }
+
+        // Fallback to left/right average for devices without master control.
+        let channels: [UInt32] = [1, 2]
+        var values: [Double] = []
+        for channel in channels {
+            volumeAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyVolumeScalar,
+                mScope: kAudioDevicePropertyScopeOutput,
+                mElement: channel
+            )
+            var channelVolume = Float32(0)
+            size = UInt32(MemoryLayout<Float32>.size)
+            let channelStatus = AudioObjectGetPropertyData(
+                deviceID,
+                &volumeAddress,
+                0,
+                nil,
+                &size,
+                &channelVolume
+            )
+            if channelStatus == noErr {
+                values.append(Double(channelVolume))
+            }
+        }
+        guard !values.isEmpty else { return nil }
+        let avg = values.reduce(0, +) / Double(values.count)
+        return avg * 100
+    }
+
+    nonisolated private static func readDefaultOutputDeviceID() -> AudioObjectID? {
+        var deviceID = AudioObjectID(0)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &size,
+            &deviceID
+        )
+        return (status == noErr && deviceID != 0) ? deviceID : nil
+    }
+
+    nonisolated private static func readOutputDeviceUID(_ deviceID: AudioObjectID) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var cfUID: CFString?
+        var size = UInt32(MemoryLayout<CFString?>.size)
+        let status = AudioObjectGetPropertyData(
+            deviceID,
+            &address,
+            0,
+            nil,
+            &size,
+            &cfUID
+        )
+        guard status == noErr, let cfUID else { return nil }
+        return cfUID as String
+    }
+
+    nonisolated private static func readOutputDeviceName(_ deviceID: AudioObjectID) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var cfName: CFString?
+        var size = UInt32(MemoryLayout<CFString?>.size)
+        let status = AudioObjectGetPropertyData(
+            deviceID,
+            &address,
+            0,
+            nil,
+            &size,
+            &cfName
+        )
+        guard status == noErr, let cfName else { return nil }
+        return cfName as String
     }
 
     nonisolated private func runTCCReset(service: String, bundleID: String) {
@@ -423,6 +722,7 @@ final class GlobalKeyEventTap {
 
 enum SoundProfile: String, CaseIterable, Identifiable {
     case g915Tactile
+    case customPack
     case holyPanda
     case gateronBlackInk
     case mxBrown
@@ -435,6 +735,7 @@ enum SoundProfile: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .g915Tactile: return "G915 Tactile"
+        case .customPack: return "Custom Pack"
         case .holyPanda: return "Holy Panda"
         case .gateronBlackInk: return "Gateron Black Ink"
         case .mxBrown: return "MX Brown"
@@ -456,6 +757,9 @@ final class ClickSoundEngine {
     var releaseLevel: Float = 0.65
     var spaceLevel: Float = 1.1
     var dynamicCompensationGain: Float = 1.0
+    var typingSpeedGain: Float = 1.0
+    var limiterEnabled: Bool = true
+    var limiterDrive: Float = 1.2
 
     private struct SampleBank {
         var keyDown: [AVAudioPCMBuffer]
@@ -478,6 +782,7 @@ final class ClickSoundEngine {
         backspaceDown: [],
         backspaceUp: []
     )
+    private var customPackRoot: URL?
 
     init() {
         engine.attach(player)
@@ -529,6 +834,24 @@ final class ClickSoundEngine {
                     "Sounds/g915/g915-key-release-2.wav",
                     "Sounds/g915/g915-key-release-4.wav"
                 ]
+            )
+        case .customPack:
+            if let root = customPackRoot, installCustomPack(from: root) {
+                return
+            }
+            let fallback = Self.defaultCustomPackDirectory()
+            if installCustomPack(from: fallback) {
+                return
+            }
+            bank = loadBank(
+                keyDown: ["Sounds/g915/g915-key-press-1.wav"],
+                keyUp: ["Sounds/g915/g915-key-release-1.wav"],
+                spaceDown: ["Sounds/g915/g915-space-press-1.wav"],
+                spaceUp: ["Sounds/g915/g915-space-release-1.wav"],
+                enterDown: ["Sounds/g915/g915-enter-press-1.wav"],
+                enterUp: ["Sounds/g915/g915-enter-release-1.wav"],
+                backspaceDown: ["Sounds/g915/g915-key-press-2.wav"],
+                backspaceUp: ["Sounds/g915/g915-key-release-2.wav"]
             )
         case .holyPanda:
             bank = loadBank(
@@ -639,6 +962,15 @@ final class ClickSoundEngine {
         }
     }
 
+    func installCustomPack(from root: URL) -> Bool {
+        let resolvedRoot = Self.resolveRoot(for: root)
+        let loaded = loadBankFromDirectory(resolvedRoot)
+        guard !loaded.keyDown.isEmpty else { return false }
+        customPackRoot = resolvedRoot
+        bank = loaded
+        return true
+    }
+
     func startIfNeeded() {
         if !engine.isRunning {
             do {
@@ -678,7 +1010,7 @@ final class ClickSoundEngine {
 
         var gainJitter = Float.random(in: -variation ... variation) * 0.18
         if autorepeat { gainJitter -= 0.1 }
-        let gain = (masterVolume * keyLevel * dynamicCompensationGain + gainJitter).clamped(to: 0.03 ... 2.5)
+        let gain = (masterVolume * keyLevel * dynamicCompensationGain * typingSpeedGain + gainJitter).clamped(to: 0.03 ... 2.8)
         schedule(pool.randomElement(), gain: gain)
     }
 
@@ -694,7 +1026,7 @@ final class ClickSoundEngine {
         case 51, 117: pool = bank.backspaceUp
         default: pool = bank.keyUp
         }
-        let gain = (masterVolume * releaseLevel * dynamicCompensationGain + Float.random(in: -variation ... variation) * 0.08).clamped(to: 0.02 ... 1.2)
+        let gain = (masterVolume * releaseLevel * dynamicCompensationGain * typingSpeedGain + Float.random(in: -variation ... variation) * 0.08).clamped(to: 0.02 ... 1.3)
         schedule(pool.randomElement(), gain: gain)
     }
 
@@ -712,7 +1044,12 @@ final class ClickSoundEngine {
             guard let src = buffer.floatChannelData?[channel],
                   let dst = copy.floatChannelData?[channel] else { continue }
             for i in 0 ..< frames {
-                dst[i] = Float(tanh(Double(src[i] * gain)))
+                let pre = src[i] * gain
+                if limiterEnabled {
+                    dst[i] = Float(tanh(Double(pre * limiterDrive)) / tanh(Double(max(0.8, limiterDrive))))
+                } else {
+                    dst[i] = pre.clamped(to: -1.0 ... 1.0)
+                }
             }
         }
 
@@ -748,6 +1085,31 @@ final class ClickSoundEngine {
             NSLog("No keyboard sample files loaded for selected profile")
             return bank
         }
+        return loaded
+    }
+
+    private func loadBankFromDirectory(_ root: URL) -> SampleBank {
+        let exts = ["wav", "mp3", "m4a", "aif", "aiff"]
+        func files(prefixes: [String]) -> [URL] {
+            guard let all = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return [] }
+            let lower = all.map { $0 }.filter { exts.contains($0.pathExtension.lowercased()) }
+            let matched = lower.filter { url in
+                let name = url.deletingPathExtension().lastPathComponent.lowercased()
+                return prefixes.contains { name.hasPrefix($0) }
+            }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+            return matched
+        }
+
+        let loaded = SampleBank(
+            keyDown: expandSamples(files(prefixes: ["key-down", "press-key", "keydown"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2),
+            keyUp: expandSamples(files(prefixes: ["key-up", "release-key", "keyup"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2),
+            spaceDown: expandSamples(files(prefixes: ["space-down", "press-space"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2),
+            spaceUp: expandSamples(files(prefixes: ["space-up", "release-space"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2),
+            enterDown: expandSamples(files(prefixes: ["enter-down", "press-enter"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2),
+            enterUp: expandSamples(files(prefixes: ["enter-up", "release-enter"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2),
+            backspaceDown: expandSamples(files(prefixes: ["backspace-down", "press-back"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2),
+            backspaceUp: expandSamples(files(prefixes: ["backspace-up", "release-back"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2)
+        )
         return loaded
     }
 
@@ -839,6 +1201,44 @@ final class ClickSoundEngine {
             NSLog("Failed to load sample \(resourcePath): \(error)")
             return nil
         }
+    }
+
+    private func loadPCMBuffer(fileURL: URL) -> AVAudioPCMBuffer? {
+        do {
+            let file = try AVAudioFile(forReading: fileURL)
+            let inFormat = file.processingFormat
+            guard let sourceBuffer = AVAudioPCMBuffer(pcmFormat: inFormat, frameCapacity: AVAudioFrameCount(file.length)) else {
+                return nil
+            }
+            try file.read(into: sourceBuffer)
+            if inFormat.sampleRate == format.sampleRate,
+               inFormat.channelCount == format.channelCount {
+                return sourceBuffer
+            }
+            return convert(sourceBuffer: sourceBuffer, from: inFormat, to: format)
+        } catch {
+            NSLog("Failed to load custom sample \(fileURL.path): \(error)")
+            return nil
+        }
+    }
+
+    private static func defaultCustomPackDirectory() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("Klac/SoundPacks/Custom", isDirectory: true)
+    }
+
+    private static func resolveRoot(for directory: URL) -> URL {
+        let manifestNames = ["key-down", "press-key", "keydown"]
+        guard let items = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return directory }
+        let hasSamples = items.contains { item in
+            let name = item.deletingPathExtension().lastPathComponent.lowercased()
+            return manifestNames.contains { name.hasPrefix($0) }
+        }
+        if hasSamples { return directory }
+        if let nested = items.first(where: { $0.hasDirectoryPath }) {
+            return nested
+        }
+        return directory
     }
 
     private func convert(sourceBuffer: AVAudioPCMBuffer, from inFormat: AVAudioFormat, to outFormat: AVAudioFormat) -> AVAudioPCMBuffer? {
