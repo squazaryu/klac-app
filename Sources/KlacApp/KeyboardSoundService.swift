@@ -8,6 +8,22 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class KeyboardSoundService: ObservableObject {
+    enum AppearanceMode: String, CaseIterable, Identifiable {
+        case system
+        case light
+        case dark
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .system: return "Системная"
+            case .light: return "Светлая"
+            case .dark: return "Темная"
+            }
+        }
+    }
+
     @Published var isEnabled = true {
         didSet { defaults.set(isEnabled, forKey: Keys.isEnabled) }
     }
@@ -104,6 +120,9 @@ final class KeyboardSoundService: ObservableObject {
         }
     }
     @Published var soundPackStatus: String?
+    @Published var appearanceMode: AppearanceMode = .system {
+        didSet { defaults.set(appearanceMode.rawValue, forKey: Keys.appearanceMode) }
+    }
 
     private let soundEngine = ClickSoundEngine()
     private let eventTap = GlobalKeyEventTap()
@@ -133,6 +152,7 @@ final class KeyboardSoundService: ObservableObject {
         static let limiterEnabled = "settings.limiterEnabled"
         static let limiterDrive = "settings.limiterDrive"
         static let outputDeviceBoosts = "settings.outputDeviceBoosts"
+        static let appearanceMode = "settings.appearanceMode"
     }
 
     init() {
@@ -185,6 +205,10 @@ final class KeyboardSoundService: ObservableObject {
         if let data = defaults.data(forKey: Keys.outputDeviceBoosts),
            let decoded = try? JSONDecoder().decode([String: Double].self, from: data) {
             outputDeviceBoosts = decoded
+        }
+        if let modeRaw = defaults.string(forKey: Keys.appearanceMode),
+           let mode = AppearanceMode(rawValue: modeRaw) {
+            appearanceMode = mode
         }
 
         soundEngine.masterVolume = Float(volume)

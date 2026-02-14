@@ -3,22 +3,19 @@ import AppKit
 
 struct ContentView: View {
     @EnvironmentObject private var service: KeyboardSoundService
+    @Environment(\.colorScheme) private var systemColorScheme
     @State private var showAdvancedPopover = false
 
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [
-                    Color(red: 0.10, green: 0.16, blue: 0.26),
-                    Color(red: 0.07, green: 0.11, blue: 0.19),
-                    Color(red: 0.06, green: 0.08, blue: 0.14)
-                ],
+                colors: backgroundGradient,
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             .overlay {
                 Circle()
-                    .fill(Color.cyan.opacity(0.18))
+                    .fill(accentBlobColor)
                     .frame(width: 200, height: 200)
                     .blur(radius: 26)
                     .offset(x: 90, y: -100)
@@ -35,13 +32,49 @@ struct ContentView: View {
         .onAppear {
             service.start()
         }
+        .preferredColorScheme(preferredColorScheme)
+    }
+
+    private var preferredColorScheme: ColorScheme? {
+        switch service.appearanceMode {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+
+    private var isDarkTheme: Bool {
+        switch service.appearanceMode {
+        case .system: return systemColorScheme == .dark
+        case .light: return false
+        case .dark: return true
+        }
+    }
+
+    private var backgroundGradient: [Color] {
+        if isDarkTheme {
+            return [
+                Color(red: 0.10, green: 0.16, blue: 0.26),
+                Color(red: 0.07, green: 0.11, blue: 0.19),
+                Color(red: 0.06, green: 0.08, blue: 0.14)
+            ]
+        }
+        return [
+            Color(red: 0.92, green: 0.95, blue: 0.99),
+            Color(red: 0.87, green: 0.92, blue: 0.98),
+            Color(red: 0.82, green: 0.89, blue: 0.97)
+        ]
+    }
+
+    private var accentBlobColor: Color {
+        isDarkTheme ? Color.cyan.opacity(0.18) : Color.blue.opacity(0.16)
     }
 
     private var header: some View {
         HStack {
             Text("Klac")
                 .font(.system(size: 22, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
             Spacer()
             Button {
                 showAdvancedPopover.toggle()
@@ -57,7 +90,7 @@ struct ContentView: View {
             Toggle("Вкл", isOn: $service.isEnabled)
                 .toggleStyle(.switch)
                 .tint(.cyan)
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .onChange(of: service.isEnabled) { enabled in
                     enabled ? service.start() : service.stop()
                 }
@@ -68,7 +101,7 @@ struct ContentView: View {
         GlassCard(title: "Права доступа") {
             VStack(alignment: .leading, spacing: 8) {
                 Text(service.capturingKeyboard ? "Перехват клавиш активен." : "Нужны Accessibility + Input Monitoring.")
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
 
                 Text(service.capturingKeyboard
                      ? "Все разрешения выданы."
@@ -91,7 +124,7 @@ struct ContentView: View {
                 if let hint = service.accessActionHint {
                     Text(hint)
                         .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.8))
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -106,7 +139,7 @@ struct ContentView: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .tint(.white)
+                .tint(.primary)
 
                 Button("Тест звука") {
                     service.playTestSound()
@@ -119,7 +152,7 @@ struct ContentView: View {
     private var footer: some View {
         HStack {
             Text("Работает в фоне.")
-                .foregroundStyle(.white.opacity(0.75))
+                .foregroundStyle(.secondary)
                 .font(.footnote)
             Spacer()
             Button("Выход") {
@@ -138,20 +171,21 @@ private struct GlassCard<Content: View>: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title)
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.92))
+                .foregroundStyle(.primary)
             content
         }
         .padding(12)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
+                .strokeBorder(Color.primary.opacity(0.18), lineWidth: 1)
         }
     }
 }
 
 private struct AdvancedSettingsView: View {
     @ObservedObject var service: KeyboardSoundService
+    @Environment(\.colorScheme) private var systemColorScheme
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -159,7 +193,7 @@ private struct AdvancedSettingsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Дополнительные настройки")
                     .font(.title3.bold())
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
 
                 GlassCard(title: "Звук") {
                     VStack(alignment: .leading, spacing: 10) {
@@ -170,20 +204,20 @@ private struct AdvancedSettingsView: View {
                         sliderRow(title: "Space/Enter", value: $service.spaceLevel, range: 0.5 ... 1.8)
                         Toggle("Звук отпускания клавиши", isOn: $service.playKeyUp)
                             .tint(.cyan)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                         Toggle("Автокомпенсация по системной громкости", isOn: $service.dynamicCompensationEnabled)
                             .tint(.cyan)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                         sliderRow(title: "Сила компенсации", value: $service.compensationStrength, range: 0.0 ... 2.0)
                             .opacity(service.dynamicCompensationEnabled ? 1.0 : 0.45)
                         Toggle("Адаптация к скорости печати", isOn: $service.typingAdaptiveEnabled)
                             .tint(.cyan)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                         sliderRow(title: "Сила адаптации", value: $service.typingAdaptiveStrength, range: 0.0 ... 1.5)
                             .opacity(service.typingAdaptiveEnabled ? 1.0 : 0.45)
                         Toggle("Лимитер пиков", isOn: $service.limiterEnabled)
                             .tint(.cyan)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                         sliderRow(title: "Драйв лимитера", value: $service.limiterDrive, range: 0.6 ... 2.0)
                             .opacity(service.limiterEnabled ? 1.0 : 0.45)
                         HStack {
@@ -191,12 +225,12 @@ private struct AdvancedSettingsView: View {
                                 .buttonStyle(PrimaryGlassButtonStyle())
                             Text("Профиль: Custom Pack")
                                 .font(.footnote)
-                                .foregroundStyle(.white.opacity(0.75))
+                                .foregroundStyle(.secondary)
                         }
                         if let status = service.soundPackStatus {
                             Text(status)
                                 .font(.footnote)
-                                .foregroundStyle(.white.opacity(0.85))
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -204,11 +238,11 @@ private struct AdvancedSettingsView: View {
                 GlassCard(title: "Устройство вывода") {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(service.currentOutputDeviceName)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                         sliderRow(title: "Калибровка", value: $service.currentOutputDeviceBoost, range: 0.5 ... 2.0)
                         Text("Отдельно сохраняется для каждого аудиоустройства.")
                             .font(.footnote)
-                            .foregroundStyle(.white.opacity(0.75))
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -223,7 +257,13 @@ private struct AdvancedSettingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Toggle("Автозапуск при входе в систему", isOn: $service.launchAtLogin)
                             .tint(.cyan)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
+                        Picker("Тема", selection: $service.appearanceMode) {
+                            ForEach(KeyboardSoundService.AppearanceMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
                         HStack {
                             Button("Проверить доступы") { service.refreshAccessibilityStatus(promptIfNeeded: true) }
                                 .buttonStyle(PrimaryGlassButtonStyle())
@@ -250,23 +290,42 @@ private struct AdvancedSettingsView: View {
         .frame(width: 520, height: 560)
         .background(
             LinearGradient(
-                colors: [Color(red: 0.10, green: 0.16, blue: 0.26), Color(red: 0.06, green: 0.08, blue: 0.14)],
+                colors: isDarkTheme
+                ? [Color(red: 0.10, green: 0.16, blue: 0.26), Color(red: 0.06, green: 0.08, blue: 0.14)]
+                : [Color(red: 0.93, green: 0.96, blue: 0.99), Color(red: 0.85, green: 0.92, blue: 0.98)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
         )
+        .preferredColorScheme(preferredColorScheme)
+    }
+
+    private var preferredColorScheme: ColorScheme? {
+        switch service.appearanceMode {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+
+    private var isDarkTheme: Bool {
+        switch service.appearanceMode {
+        case .system: return systemColorScheme == .dark
+        case .light: return false
+        case .dark: return true
+        }
     }
 
     private func sliderRow(title: String, value: Binding<Double>, range: ClosedRange<Double> = 0.0 ... 1.0) -> some View {
         HStack {
             Text(title)
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .frame(width: 110, alignment: .leading)
             Slider(value: value, in: range)
                 .tint(.cyan)
             Text("\(Int(value.wrappedValue * 100))%")
                 .monospacedDigit()
-                .foregroundStyle(.white.opacity(0.9))
+                .foregroundStyle(.primary)
                 .frame(width: 52, alignment: .trailing)
         }
     }
@@ -275,14 +334,14 @@ private struct AdvancedSettingsView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.footnote)
-                .foregroundStyle(.white.opacity(0.75))
+                .foregroundStyle(.secondary)
             Text(value)
                 .font(.system(size: 22, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
@@ -290,16 +349,16 @@ private struct PrimaryGlassButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(configuration.isPressed ? Color.black.opacity(0.45) : Color.white.opacity(0.26))
+                    .fill(configuration.isPressed ? Color.primary.opacity(0.18) : Color.primary.opacity(0.12))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color.white.opacity(configuration.isPressed ? 0.34 : 0.52), lineWidth: 1)
+                    .strokeBorder(Color.primary.opacity(configuration.isPressed ? 0.30 : 0.38), lineWidth: 1)
             )
     }
 }
