@@ -240,11 +240,6 @@ final class KeyboardSoundService: ObservableObject {
 
     func start() {
         refreshAccessibilityStatus(promptIfNeeded: true)
-        guard accessibilityGranted else {
-            capturingKeyboard = false
-            return
-        }
-
         soundEngine.startIfNeeded()
         capturingKeyboard = eventTap.start()
     }
@@ -256,9 +251,13 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     func refreshAccessibilityStatus(promptIfNeeded: Bool) {
-        let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: promptIfNeeded] as CFDictionary
-        accessibilityGranted = AXIsProcessTrustedWithOptions(options)
-        if isEnabled, accessibilityGranted {
+        if promptIfNeeded {
+            let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary
+            accessibilityGranted = AXIsProcessTrustedWithOptions(options)
+        } else {
+            accessibilityGranted = AXIsProcessTrusted()
+        }
+        if isEnabled {
             soundEngine.startIfNeeded()
             capturingKeyboard = eventTap.start()
         }
@@ -284,10 +283,8 @@ final class KeyboardSoundService: ObservableObject {
             return
         }
         runTCCReset(service: "Accessibility", bundleID: bundleID)
-        runTCCReset(service: "ListenEvent", bundleID: bundleID)
         openAccessibilitySettings()
-        openInputMonitoringSettings()
-        accessActionHint = "Доступы сброшены. Выдай разрешения заново и перезапусти Klac."
+        accessActionHint = "Доступы сброшены. Включи Klac в Универсальном доступе и перезапусти приложение."
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             self?.refreshAccessibilityStatus(promptIfNeeded: false)
         }
@@ -297,23 +294,25 @@ final class KeyboardSoundService: ObservableObject {
         resetPrivacyPermissions()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.openAccessibilitySettings()
-            self?.openInputMonitoringSettings()
-            self?.accessActionHint = "1) Включи Klac в обоих разделах. 2) Нажми Перезапустить Klac."
+            self?.accessActionHint = "Открыл Универсальный доступ и перезапускаю приложение. После запуска включи Klac в списке."
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { [weak self] in
+            self?.restartApplication()
         }
     }
 
     func restartApplication() {
         let appURL = Bundle.main.bundleURL
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = false
-        NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, error in
-            if let error {
-                NSLog("Failed to relaunch app: \(error)")
-                return
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-n", appURL.path]
+        do {
+            try process.run()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                 NSApplication.shared.terminate(nil)
             }
+        } catch {
+            NSLog("Failed to relaunch app via open -n: \(error)")
         }
     }
 

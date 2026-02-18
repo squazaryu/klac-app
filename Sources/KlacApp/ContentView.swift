@@ -5,6 +5,8 @@ struct ContentView: View {
     @EnvironmentObject private var service: KeyboardSoundService
     @Environment(\.colorScheme) private var systemColorScheme
     @State private var showAdvancedPopover = false
+    @State private var showAccessHintPopover = false
+    private let panelWidth: CGFloat = 320
 
     var body: some View {
         ZStack {
@@ -28,6 +30,7 @@ struct ContentView: View {
                 footer
             }
             .padding(14)
+            .frame(width: panelWidth, alignment: .leading)
         }
         .onAppear {
             service.start()
@@ -76,58 +79,82 @@ struct ContentView: View {
                 .font(.system(size: 22, weight: .semibold, design: .rounded))
                 .foregroundStyle(.primary)
             Spacer()
-            Button {
-                showAdvancedPopover.toggle()
-            } label: {
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 14, weight: .semibold))
-            }
-            .buttonStyle(PrimaryGlassButtonStyle())
-            .popover(isPresented: $showAdvancedPopover, arrowEdge: .top) {
-                AdvancedSettingsView(service: service)
-            }
-
-            Toggle("Вкл", isOn: $service.isEnabled)
-                .toggleStyle(.switch)
-                .tint(.cyan)
-                .foregroundStyle(.primary)
-                .onChange(of: service.isEnabled) { enabled in
-                    enabled ? service.start() : service.stop()
+            HStack(spacing: 10) {
+                Button {
+                    showAdvancedPopover.toggle()
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 14, weight: .semibold))
                 }
+                .buttonStyle(PrimaryGlassButtonStyle())
+                .popover(isPresented: $showAdvancedPopover, arrowEdge: .top) {
+                    AdvancedSettingsView(service: service)
+                }
+
+                Toggle("Вкл", isOn: $service.isEnabled)
+                    .toggleStyle(.switch)
+                    .tint(.cyan)
+                    .foregroundStyle(.primary)
+                    .onChange(of: service.isEnabled) { enabled in
+                        enabled ? service.start() : service.stop()
+                    }
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var permissionsCard: some View {
         GlassCard(title: "Права доступа") {
             VStack(alignment: .leading, spacing: 8) {
-                Text(service.capturingKeyboard ? "Перехват клавиш активен." : "Нужны Accessibility + Input Monitoring.")
+                Text(service.capturingKeyboard ? "Перехват клавиш активен." : "Нужен Универсальный доступ.")
                     .foregroundStyle(.primary)
 
                 Text(service.capturingKeyboard
                      ? "Все разрешения выданы."
-                     : "Если включено, но не работает: нажми восстановление и выдай доступы заново.")
+                     : "Если не работает — нажми «Восстановить».")
                     .foregroundStyle(service.capturingKeyboard ? .green : .orange)
                     .font(.footnote)
 
-                HStack {
+                HStack(spacing: 8) {
                     Button("Проверить") {
                         service.refreshAccessibilityStatus(promptIfNeeded: true)
                     }
                     .buttonStyle(PrimaryGlassButtonStyle())
+                    .frame(maxWidth: .infinity)
 
                     Button("Восстановить") {
                         service.runAccessRecoveryWizard()
                     }
                     .buttonStyle(PrimaryGlassButtonStyle())
+                    .frame(maxWidth: .infinity)
                 }
 
-                if let hint = service.accessActionHint {
-                    Text(hint)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                HStack {
+                    Spacer()
+                    Button {
+                        showAccessHintPopover.toggle()
+                    } label: {
+                        Image(systemName: "questionmark.circle")
+                            .font(.system(size: 15, weight: .semibold))
+                    }
+                    .buttonStyle(PrimaryGlassButtonStyle())
+                    .frame(width: 34, height: 28)
+                    .popover(isPresented: $showAccessHintPopover, arrowEdge: .bottom) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Подсказка")
+                                .font(.headline)
+                            Text(service.accessActionHint ?? "Нажми «Проверить». Если не помогло, нажми «Восстановить», выдай доступ и перезапусти приложение.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(12)
+                        .frame(width: 320)
+                    }
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var quickSoundCard: some View {
@@ -147,6 +174,7 @@ struct ContentView: View {
                 .buttonStyle(PrimaryGlassButtonStyle())
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var footer: some View {
@@ -155,11 +183,16 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .font(.footnote)
             Spacer()
-            Button("Выход") {
+            Button {
                 NSApplication.shared.terminate(nil)
+            } label: {
+                Image(systemName: "power")
+                    .font(.system(size: 15, weight: .semibold))
             }
             .buttonStyle(PrimaryGlassButtonStyle())
+            .help("Выход")
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -174,6 +207,7 @@ private struct GlassCard<Content: View>: View {
                 .foregroundStyle(.primary)
             content
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
@@ -349,6 +383,8 @@ private struct PrimaryGlassButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
             .foregroundStyle(.primary)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
