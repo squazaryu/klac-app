@@ -244,16 +244,39 @@ private struct AdvancedSettingsView: View {
                             .foregroundStyle(.primary)
                         sliderRow(title: "Сила компенсации", value: $service.compensationStrength, range: 0.0 ... 2.0)
                             .opacity(service.dynamicCompensationEnabled ? 1.0 : 0.45)
+                        Text("Текущая компенсация: x\(String(format: "%.2f", service.liveDynamicGain))")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                         Toggle("Адаптация к скорости печати", isOn: $service.typingAdaptiveEnabled)
                             .tint(.cyan)
                             .foregroundStyle(.primary)
                         sliderRow(title: "Сила адаптации", value: $service.typingAdaptiveStrength, range: 0.0 ... 1.5)
                             .opacity(service.typingAdaptiveEnabled ? 1.0 : 0.45)
+                        Text("Адаптация сейчас: x\(String(format: "%.2f", service.liveTypingGain)) · \(String(format: "%.1f", service.typingCPS)) CPS")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                         Toggle("Лимитер пиков", isOn: $service.limiterEnabled)
                             .tint(.cyan)
                             .foregroundStyle(.primary)
                         sliderRow(title: "Драйв лимитера", value: $service.limiterDrive, range: 0.6 ... 2.0)
                             .opacity(service.limiterEnabled ? 1.0 : 0.45)
+                        HStack(spacing: 8) {
+                            Picker("A/B", selection: $service.abFeature) {
+                                ForEach(KeyboardSoundService.ABFeature.allCases) { feature in
+                                    Text(feature.title).tag(feature)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .tint(.primary)
+                            Button(service.isABPlaying ? "Сравнение..." : "Сравнить OFF/ON") {
+                                service.playABComparison()
+                            }
+                            .buttonStyle(PrimaryGlassButtonStyle())
+                            .disabled(service.isABPlaying)
+                        }
+                        Text("Проигрывает два теста подряд: сначала OFF, затем ON.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                         HStack {
                             Button("Импорт Sound Pack") { service.importSoundPack() }
                                 .buttonStyle(PrimaryGlassButtonStyle())
