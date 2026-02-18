@@ -8,6 +8,22 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class KeyboardSoundService: ObservableObject {
+    enum ABFeature: String, CaseIterable, Identifiable {
+        case compensation
+        case adaptation
+        case limiter
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .compensation: return "Компенсация"
+            case .adaptation: return "Адаптация"
+            case .limiter: return "Лимитер"
+            }
+        }
+    }
+
     enum AppearanceMode: String, CaseIterable, Identifiable {
         case system
         case light
@@ -112,6 +128,10 @@ final class KeyboardSoundService: ObservableObject {
     }
     @Published var typingCPS: Double = 0
     @Published var typingWPM: Double = 0
+    @Published var liveDynamicGain: Double = 1.0
+    @Published var liveTypingGain: Double = 1.0
+    @Published var abFeature: ABFeature = .compensation
+    @Published var isABPlaying = false
     @Published var currentOutputDeviceName = "Системное устройство"
     @Published var currentOutputDeviceBoost: Double = 1.0 {
         didSet {
@@ -134,6 +154,7 @@ final class KeyboardSoundService: ObservableObject {
     private var outputDeviceBoosts: [String: Double] = [:]
     private var currentOutputDeviceUID = ""
     private var typingTimestamps: [CFAbsoluteTime] = []
+    private var typingDecayTimer: Timer?
 
     private enum Keys {
         static let isEnabled = "settings.isEnabled"
@@ -220,6 +241,7 @@ final class KeyboardSoundService: ObservableObject {
         soundEngine.limiterDrive = Float(limiterDrive)
         soundEngine.setProfile(selectedProfile)
         startSystemVolumeMonitoring()
+        startTypingDecayMonitoring()
         updateDynamicCompensation()
         updateTypingAdaptation()
         refreshAccessibilityStatus(promptIfNeeded: false)
@@ -276,9 +298,7 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     func resetPrivacyPermissions() {
-        guard let bundleID = Bundle.main.bundleIdentifier ??
-                (Bundle.main.object(forInfoDictionaryKey: kCFBundleIdentifierKey as String) as? String),
-              !bundleID.isEmpty else {
+        guard let bundleID = resolveBundleIdentifier() else {
             NSLog("Unable to resolve bundle identifier for TCC reset")
             return
         }
@@ -302,18 +322,69 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     func restartApplication() {
-        let appURL = Bundle.main.bundleURL
+        guard let appURL = resolveAppBundleURL() else {
+            NSLog("Failed to resolve app bundle URL for relaunch")
+            return
+        }
+        let escapedPath = appURL.path.replacingOccurrences(of: "'", with: "'\\''")
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-n", appURL.path]
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        // Spawn relaunch in background and immediately return.
+        process.arguments = ["-c", "(/usr/bin/open -n '\(escapedPath)' >/dev/null 2>&1 &)"]
         do {
             try process.run()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                 NSApplication.shared.terminate(nil)
             }
         } catch {
-            NSLog("Failed to relaunch app via open -n: \(error)")
+            NSLog("Failed to relaunch app via background open: \(error)")
         }
+    }
+
+    private func resolveBundleIdentifier() -> String? {
+        if let id = Bundle.main.bundleIdentifier, !id.isEmpty {
+            return id
+        }
+        if let id = Bundle.main.object(forInfoDictionaryKey: kCFBundleIdentifierKey as String) as? String,
+           !id.isEmpty {
+            return id
+        }
+        if let appURL = resolveAppBundleURL(),
+           let bundle = Bundle(url: appURL),
+           let id = bundle.bundleIdentifier,
+           !id.isEmpty {
+            return id
+        }
+        // Stable fallback for this app build/install pipeline.
+        return "com.tumowuh.klac"
+    }
+
+    private func resolveAppBundleURL() -> URL? {
+        // Standard app launch path.
+        let mainURL = Bundle.main.bundleURL
+        if mainURL.pathExtension == "app" {
+            return mainURL
+        }
+
+        // Running from executable inside .app/Contents/MacOS.
+        if let executableURL = Bundle.main.executableURL {
+            var cursor = executableURL
+            for _ in 0 ..< 6 {
+                let parent = cursor.deletingLastPathComponent()
+                if parent.pathExtension == "app" {
+                    return parent
+                }
+                if parent.path == cursor.path { break }
+                cursor = parent
+            }
+        }
+
+        // Installed path fallback.
+        let installed = URL(fileURLWithPath: "/Applications/Klac.app")
+        if FileManager.default.fileExists(atPath: installed.path) {
+            return installed
+        }
+        return nil
     }
 
     func playTestSound() {
@@ -321,6 +392,46 @@ final class KeyboardSoundService: ObservableObject {
         soundEngine.playDown(for: 0, autorepeat: false)
         if playKeyUp {
             soundEngine.playUp(for: 0)
+        }
+    }
+
+    func playABComparison() {
+        guard !isABPlaying else { return }
+        isABPlaying = true
+
+        let originalCompensationEnabled = dynamicCompensationEnabled
+        let originalAdaptationEnabled = typingAdaptiveEnabled
+        let originalLimiterEnabled = limiterEnabled
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            switch self.abFeature {
+            case .compensation:
+                self.dynamicCompensationEnabled = false
+                self.playTestSound()
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                self.dynamicCompensationEnabled = true
+                self.playTestSound()
+            case .adaptation:
+                self.typingAdaptiveEnabled = false
+                self.playTestSound()
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                self.typingAdaptiveEnabled = true
+                self.playTestSound()
+            case .limiter:
+                self.limiterEnabled = false
+                self.playTestSound()
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                self.limiterEnabled = true
+                self.playTestSound()
+            }
+
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            self.dynamicCompensationEnabled = originalCompensationEnabled
+            self.typingAdaptiveEnabled = originalAdaptationEnabled
+            self.limiterEnabled = originalLimiterEnabled
+            self.isABPlaying = false
         }
     }
 
@@ -455,34 +566,55 @@ final class KeyboardSoundService: ObservableObject {
     private func updateDynamicCompensation() {
         guard dynamicCompensationEnabled else {
             soundEngine.dynamicCompensationGain = 1.0
+            liveDynamicGain = 1.0
             return
         }
         // More boost when system output is low; soft-limited in audio engine.
         let lowVolumeFactor = max(0.0, 1.0 - lastSystemVolume)
         let gain = (1.0 + lowVolumeFactor * compensationStrength * 1.5) * currentOutputDeviceBoost
-        soundEngine.dynamicCompensationGain = Float(gain).clamped(to: 1.0 ... 3.0)
+        let clamped = Float(gain).clamped(to: 1.0 ... 3.0)
+        soundEngine.dynamicCompensationGain = clamped
+        liveDynamicGain = Double(clamped)
     }
 
     private func trackTypingHit() {
         let now = CFAbsoluteTimeGetCurrent()
         typingTimestamps.append(now)
-        let windowStart = now - 4.0
+        recomputeTypingSpeed(now: now)
+        updateTypingAdaptation()
+    }
+
+    private func startTypingDecayMonitoring() {
+        typingDecayTimer?.invalidate()
+        typingDecayTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let now = CFAbsoluteTimeGetCurrent()
+                self.recomputeTypingSpeed(now: now)
+                self.updateTypingAdaptation()
+            }
+        }
+    }
+
+    private func recomputeTypingSpeed(now: CFAbsoluteTime) {
+        let windowStart = now - 3.0
         typingTimestamps.removeAll { $0 < windowStart }
-        let cps = Double(typingTimestamps.count) / 4.0
+        let cps = Double(typingTimestamps.count) / 3.0
         typingCPS = cps
         typingWPM = cps * 12.0
-        updateTypingAdaptation()
     }
 
     private func updateTypingAdaptation() {
         guard typingAdaptiveEnabled else {
             soundEngine.typingSpeedGain = 1.0
+            liveTypingGain = 1.0
             return
         }
-        // Smooth gain up to +35% on fast typing.
+        // More noticeable than before: up to +70% at high typing speed.
         let normalized = min(1.0, typingCPS / 8.0)
-        let gain = 1.0 + normalized * typingAdaptiveStrength * 0.35
+        let gain = 1.0 + normalized * typingAdaptiveStrength * 0.7
         soundEngine.typingSpeedGain = Float(gain)
+        liveTypingGain = gain
     }
 
     private func saveCurrentDeviceBoost() {
@@ -1069,7 +1201,9 @@ final class ClickSoundEngine {
             for i in 0 ..< frames {
                 let pre = src[i] * gain
                 if limiterEnabled {
-                    dst[i] = Float(tanh(Double(pre * limiterDrive)) / tanh(Double(max(0.8, limiterDrive))))
+                    // Soft limiter with unity low-level slope. Higher drive => earlier compression, not loudness boost.
+                    let drive = max(0.6, limiterDrive)
+                    dst[i] = Float(tanh(Double(pre * drive)) / Double(drive))
                 } else {
                     dst[i] = pre.clamped(to: -1.0 ... 1.0)
                 }
