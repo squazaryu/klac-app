@@ -106,13 +106,17 @@ struct ContentView: View {
     private var permissionsCard: some View {
         GlassCard(title: "Права доступа") {
             VStack(alignment: .leading, spacing: 8) {
-                Text(service.capturingKeyboard ? "Перехват клавиш активен." : "Нужен Универсальный доступ.")
+                Text(service.capturingKeyboard ? "Перехват клавиш активен." : "Нужны доступы: Универсальный доступ и Мониторинг ввода.")
                     .foregroundStyle(.primary)
 
                 Text(service.capturingKeyboard
                      ? "Все разрешения выданы."
-                     : "Если не работает — нажми «Восстановить».")
+                     : "Если не работает — включи Универсальный доступ и Мониторинг ввода, затем нажми «Восстановить».")
                     .foregroundStyle(service.capturingKeyboard ? .green : .orange)
+                    .font(.footnote)
+
+                Text("Доступность: \(service.accessibilityGranted ? "OK" : "Нет") · Мониторинг ввода: \(service.inputMonitoringGranted ? "OK" : "Нет")")
+                    .foregroundStyle(.secondary)
                     .font(.footnote)
 
                 HStack(spacing: 8) {
@@ -250,11 +254,14 @@ private struct AdvancedSettingsView: View {
                         Toggle("Адаптация к скорости печати", isOn: $service.typingAdaptiveEnabled)
                             .tint(.cyan)
                             .foregroundStyle(.primary)
-                        sliderRow(title: "Сила адаптации", value: $service.typingAdaptiveStrength, range: 0.0 ... 1.5)
-                            .opacity(service.typingAdaptiveEnabled ? 1.0 : 0.45)
-                        Text("Адаптация сейчас: x\(String(format: "%.2f", service.liveTypingGain)) · \(String(format: "%.1f", service.typingCPS)) CPS")
+                        Text("Адаптация авто: x\(String(format: "%.2f", service.liveTypingGain)) · \(String(format: "%.1f", service.typingCPS)) CPS")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                        Toggle("Stack-режим", isOn: $service.stackModeEnabled)
+                            .tint(.cyan)
+                            .foregroundStyle(.primary)
+                        sliderRow(title: "Плотность стака", value: $service.stackDensity, range: 0.0 ... 1.0)
+                            .opacity(service.stackModeEnabled ? 1.0 : 0.45)
                         Toggle("Лимитер пиков", isOn: $service.limiterEnabled)
                             .tint(.cyan)
                             .foregroundStyle(.primary)

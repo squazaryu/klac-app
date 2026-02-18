@@ -9,17 +9,19 @@ import UniformTypeIdentifiers
 @MainActor
 final class KeyboardSoundService: ObservableObject {
     enum ABFeature: String, CaseIterable, Identifiable {
+        case core
         case compensation
-        case adaptation
         case limiter
+        case adaptation
 
         var id: String { rawValue }
 
         var title: String {
             switch self {
+            case .core: return "Компенсация + Лимитер"
             case .compensation: return "Компенсация"
-            case .adaptation: return "Адаптация"
             case .limiter: return "Лимитер"
+            case .adaptation: return "Адаптация"
             }
         }
     }
@@ -44,6 +46,7 @@ final class KeyboardSoundService: ObservableObject {
         didSet { defaults.set(isEnabled, forKey: Keys.isEnabled) }
     }
     @Published var accessibilityGranted = false
+    @Published var inputMonitoringGranted = false
     @Published var accessActionHint: String?
     @Published var volume: Double = 0.75 {
         didSet {
@@ -108,10 +111,16 @@ final class KeyboardSoundService: ObservableObject {
             updateTypingAdaptation()
         }
     }
-    @Published var typingAdaptiveStrength: Double = 0.7 {
+    @Published var stackModeEnabled = false {
         didSet {
-            defaults.set(typingAdaptiveStrength, forKey: Keys.typingAdaptiveStrength)
-            updateTypingAdaptation()
+            defaults.set(stackModeEnabled, forKey: Keys.stackModeEnabled)
+            soundEngine.stackModeEnabled = stackModeEnabled
+        }
+    }
+    @Published var stackDensity: Double = 0.55 {
+        didSet {
+            defaults.set(stackDensity, forKey: Keys.stackDensity)
+            soundEngine.stackDensity = Float(stackDensity)
         }
     }
     @Published var limiterEnabled = true {
@@ -130,7 +139,7 @@ final class KeyboardSoundService: ObservableObject {
     @Published var typingWPM: Double = 0
     @Published var liveDynamicGain: Double = 1.0
     @Published var liveTypingGain: Double = 1.0
-    @Published var abFeature: ABFeature = .compensation
+    @Published var abFeature: ABFeature = .core
     @Published var isABPlaying = false
     @Published var currentOutputDeviceName = "Системное устройство"
     @Published var currentOutputDeviceBoost: Double = 1.0 {
@@ -155,6 +164,7 @@ final class KeyboardSoundService: ObservableObject {
     private var currentOutputDeviceUID = ""
     private var typingTimestamps: [CFAbsoluteTime] = []
     private var typingDecayTimer: Timer?
+    private var personalBaselineCPS: Double = 3.0
 
     private enum Keys {
         static let isEnabled = "settings.isEnabled"
@@ -169,7 +179,8 @@ final class KeyboardSoundService: ObservableObject {
         static let dynamicCompensationEnabled = "settings.dynamicCompensationEnabled"
         static let compensationStrength = "settings.compensationStrength"
         static let typingAdaptiveEnabled = "settings.typingAdaptiveEnabled"
-        static let typingAdaptiveStrength = "settings.typingAdaptiveStrength"
+        static let stackModeEnabled = "settings.stackModeEnabled"
+        static let stackDensity = "settings.stackDensity"
         static let limiterEnabled = "settings.limiterEnabled"
         static let limiterDrive = "settings.limiterDrive"
         static let outputDeviceBoosts = "settings.outputDeviceBoosts"
@@ -214,8 +225,11 @@ final class KeyboardSoundService: ObservableObject {
         if defaults.object(forKey: Keys.typingAdaptiveEnabled) != nil {
             typingAdaptiveEnabled = defaults.bool(forKey: Keys.typingAdaptiveEnabled)
         }
-        if defaults.object(forKey: Keys.typingAdaptiveStrength) != nil {
-            typingAdaptiveStrength = defaults.double(forKey: Keys.typingAdaptiveStrength)
+        if defaults.object(forKey: Keys.stackModeEnabled) != nil {
+            stackModeEnabled = defaults.bool(forKey: Keys.stackModeEnabled)
+        }
+        if defaults.object(forKey: Keys.stackDensity) != nil {
+            stackDensity = defaults.double(forKey: Keys.stackDensity)
         }
         if defaults.object(forKey: Keys.limiterEnabled) != nil {
             limiterEnabled = defaults.bool(forKey: Keys.limiterEnabled)
@@ -239,6 +253,8 @@ final class KeyboardSoundService: ObservableObject {
         soundEngine.spaceLevel = Float(spaceLevel)
         soundEngine.limiterEnabled = limiterEnabled
         soundEngine.limiterDrive = Float(limiterDrive)
+        soundEngine.stackModeEnabled = stackModeEnabled
+        soundEngine.stackDensity = Float(stackDensity)
         soundEngine.setProfile(selectedProfile)
         startSystemVolumeMonitoring()
         startTypingDecayMonitoring()
@@ -264,6 +280,7 @@ final class KeyboardSoundService: ObservableObject {
         refreshAccessibilityStatus(promptIfNeeded: true)
         soundEngine.startIfNeeded()
         capturingKeyboard = eventTap.start()
+        NSLog("Keyboard capture start result: capturingKeyboard=\(capturingKeyboard), accessibilityGranted=\(accessibilityGranted), inputMonitoringGranted=\(inputMonitoringGranted)")
     }
 
     func stop() {
@@ -276,13 +293,16 @@ final class KeyboardSoundService: ObservableObject {
         if promptIfNeeded {
             let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary
             accessibilityGranted = AXIsProcessTrustedWithOptions(options)
+            inputMonitoringGranted = Self.preflightInputMonitoring(promptIfNeeded: true)
         } else {
             accessibilityGranted = AXIsProcessTrusted()
+            inputMonitoringGranted = Self.preflightInputMonitoring(promptIfNeeded: false)
         }
         if isEnabled {
             soundEngine.startIfNeeded()
             capturingKeyboard = eventTap.start()
         }
+        NSLog("Privacy status refreshed: accessibilityGranted=\(accessibilityGranted), inputMonitoringGranted=\(inputMonitoringGranted), capturingKeyboard=\(capturingKeyboard)")
     }
 
     func openAccessibilitySettings() {
@@ -303,8 +323,10 @@ final class KeyboardSoundService: ObservableObject {
             return
         }
         runTCCReset(service: "Accessibility", bundleID: bundleID)
+        runTCCReset(service: "ListenEvent", bundleID: bundleID)
         openAccessibilitySettings()
-        accessActionHint = "Доступы сброшены. Включи Klac в Универсальном доступе и перезапусти приложение."
+        openInputMonitoringSettings()
+        accessActionHint = "Доступы сброшены. Включи Klac в Универсальном доступе и Мониторинге ввода, затем перезапусти приложение."
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             self?.refreshAccessibilityStatus(promptIfNeeded: false)
         }
@@ -314,7 +336,8 @@ final class KeyboardSoundService: ObservableObject {
         resetPrivacyPermissions()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.openAccessibilitySettings()
-            self?.accessActionHint = "Открыл Универсальный доступ и перезапускаю приложение. После запуска включи Klac в списке."
+            self?.openInputMonitoringSettings()
+            self?.accessActionHint = "Открыл Универсальный доступ и Мониторинг ввода. После перезапуска включи Klac в обоих списках."
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { [weak self] in
             self?.restartApplication()
@@ -326,18 +349,35 @@ final class KeyboardSoundService: ObservableObject {
             NSLog("Failed to resolve app bundle URL for relaunch")
             return
         }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = false
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, error in
+            if let error {
+                NSLog("Primary relaunch failed: \(error). Falling back to detached open.")
+                self.relaunchWithDetachedOpen(appURL: appURL)
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                NSApplication.shared.terminate(nil)
+            }
+        }
+    }
+
+    private func relaunchWithDetachedOpen(appURL: URL) {
         let escapedPath = appURL.path.replacingOccurrences(of: "'", with: "'\\''")
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        // Spawn relaunch in background and immediately return.
-        process.arguments = ["-c", "(/usr/bin/open -n '\(escapedPath)' >/dev/null 2>&1 &)"]
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
+        process.arguments = ["/bin/sh", "-c", "sleep 0.35; /usr/bin/open -n '\(escapedPath)'"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
         do {
             try process.run()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                 NSApplication.shared.terminate(nil)
             }
         } catch {
-            NSLog("Failed to relaunch app via background open: \(error)")
+            NSLog("Detached relaunch failed: \(error)")
         }
     }
 
@@ -402,17 +442,47 @@ final class KeyboardSoundService: ObservableObject {
         let originalCompensationEnabled = dynamicCompensationEnabled
         let originalAdaptationEnabled = typingAdaptiveEnabled
         let originalLimiterEnabled = limiterEnabled
+        let originalCompensationStrength = compensationStrength
+        let originalVolume = volume
+        let originalPressLevel = pressLevel
+        let originalReleaseLevel = releaseLevel
+        let originalSpaceLevel = spaceLevel
+        let originalSystemVolume = lastSystemVolume
 
         Task { @MainActor [weak self] in
             guard let self else { return }
 
             switch self.abFeature {
-            case .compensation:
+            case .core:
+                self.volume = 1.0
+                self.pressLevel = 1.5
+                self.releaseLevel = 1.1
+                self.spaceLevel = 1.5
+                self.compensationStrength = 2.0
+                self.lastSystemVolume = 0.1
+                self.updateDynamicCompensation()
                 self.dynamicCompensationEnabled = false
-                self.playTestSound()
-                try? await Task.sleep(nanoseconds: 350_000_000)
+                self.limiterEnabled = false
+                await self.playABStressBurst()
+                try? await Task.sleep(nanoseconds: 220_000_000)
                 self.dynamicCompensationEnabled = true
-                self.playTestSound()
+                self.limiterEnabled = true
+                self.updateDynamicCompensation()
+                await self.playABStressBurst()
+            case .compensation:
+                self.volume = 1.0
+                self.pressLevel = 1.5
+                self.releaseLevel = 1.1
+                self.spaceLevel = 1.5
+                self.compensationStrength = 2.0
+                self.lastSystemVolume = 0.1
+                self.updateDynamicCompensation()
+                self.dynamicCompensationEnabled = false
+                await self.playABStressBurst()
+                try? await Task.sleep(nanoseconds: 220_000_000)
+                self.dynamicCompensationEnabled = true
+                self.updateDynamicCompensation()
+                await self.playABStressBurst()
             case .adaptation:
                 self.typingAdaptiveEnabled = false
                 self.playTestSound()
@@ -420,18 +490,40 @@ final class KeyboardSoundService: ObservableObject {
                 self.typingAdaptiveEnabled = true
                 self.playTestSound()
             case .limiter:
+                self.volume = 1.0
+                self.pressLevel = 1.5
+                self.releaseLevel = 1.1
+                self.spaceLevel = 1.5
                 self.limiterEnabled = false
-                self.playTestSound()
-                try? await Task.sleep(nanoseconds: 350_000_000)
+                await self.playABStressBurst()
+                try? await Task.sleep(nanoseconds: 220_000_000)
                 self.limiterEnabled = true
-                self.playTestSound()
+                await self.playABStressBurst()
             }
 
             try? await Task.sleep(nanoseconds: 120_000_000)
             self.dynamicCompensationEnabled = originalCompensationEnabled
             self.typingAdaptiveEnabled = originalAdaptationEnabled
             self.limiterEnabled = originalLimiterEnabled
+            self.compensationStrength = originalCompensationStrength
+            self.volume = originalVolume
+            self.pressLevel = originalPressLevel
+            self.releaseLevel = originalReleaseLevel
+            self.spaceLevel = originalSpaceLevel
+            self.lastSystemVolume = originalSystemVolume
+            self.updateDynamicCompensation()
             self.isABPlaying = false
+        }
+    }
+
+    private func playABStressBurst() async {
+        soundEngine.startIfNeeded()
+        for key in [49, 36, 51, 0, 49] {
+            soundEngine.playDown(for: key, autorepeat: false)
+            if playKeyUp {
+                soundEngine.playUp(for: key)
+            }
+            try? await Task.sleep(nanoseconds: 65_000_000)
         }
     }
 
@@ -569,10 +661,10 @@ final class KeyboardSoundService: ObservableObject {
             liveDynamicGain = 1.0
             return
         }
-        // More boost when system output is low; soft-limited in audio engine.
+        // Stronger curve so slider movement is audible in normal usage too.
         let lowVolumeFactor = max(0.0, 1.0 - lastSystemVolume)
-        let gain = (1.0 + lowVolumeFactor * compensationStrength * 1.5) * currentOutputDeviceBoost
-        let clamped = Float(gain).clamped(to: 1.0 ... 3.0)
+        let gain = (1.0 + lowVolumeFactor * (0.4 + compensationStrength * 2.6)) * currentOutputDeviceBoost
+        let clamped = Float(gain).clamped(to: 1.0 ... 4.0)
         soundEngine.dynamicCompensationGain = clamped
         liveDynamicGain = Double(clamped)
     }
@@ -602,6 +694,7 @@ final class KeyboardSoundService: ObservableObject {
         let cps = Double(typingTimestamps.count) / 3.0
         typingCPS = cps
         typingWPM = cps * 12.0
+        personalBaselineCPS = personalBaselineCPS * 0.985 + cps * 0.015
     }
 
     private func updateTypingAdaptation() {
@@ -610,11 +703,13 @@ final class KeyboardSoundService: ObservableObject {
             liveTypingGain = 1.0
             return
         }
-        // More noticeable than before: up to +70% at high typing speed.
-        let normalized = min(1.0, typingCPS / 8.0)
-        let gain = 1.0 + normalized * typingAdaptiveStrength * 0.7
-        soundEngine.typingSpeedGain = Float(gain)
-        liveTypingGain = gain
+        // Fully automatic adaptation to personal typing speed.
+        let target = max(2.5, personalBaselineCPS * 1.1)
+        let normalized = (typingCPS / target).clamped(to: 0.0 ... 1.6)
+        let gain = 1.0 + 0.25 + normalized * 0.95
+        let clamped = gain.clamped(to: 1.0 ... 2.5)
+        soundEngine.typingSpeedGain = Float(clamped)
+        liveTypingGain = clamped
     }
 
     private func saveCurrentDeviceBoost() {
@@ -787,6 +882,14 @@ final class KeyboardSoundService: ObservableObject {
             NSLog("Failed to reset TCC \(service): \(error)")
         }
     }
+
+    nonisolated private static func preflightInputMonitoring(promptIfNeeded: Bool) -> Bool {
+        let preflight = CGPreflightListenEventAccess()
+        if preflight || !promptIfNeeded {
+            return preflight
+        }
+        return CGRequestListenEventAccess()
+    }
 }
 
 private struct SettingsSnapshot: Codable {
@@ -809,11 +912,16 @@ final class GlobalKeyEventTap {
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var globalMonitor: Any?
+    private var firstEventLogged = false
 
     func start() -> Bool {
-        if eventTap != nil { return true }
+        if eventTap != nil || globalMonitor != nil { return true }
+        firstEventLogged = false
 
-        let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+        let mask = (1 << CGEventType.keyDown.rawValue) |
+            (1 << CGEventType.keyUp.rawValue) |
+            (1 << CGEventType.flagsChanged.rawValue)
         let callback: CGEventTapCallBack = { proxy, type, event, refcon in
             _ = proxy
             guard let refcon else { return Unmanaged.passUnretained(event) }
@@ -826,15 +934,27 @@ final class GlobalKeyEventTap {
                 return Unmanaged.passUnretained(event)
             }
 
-            guard type == .keyDown || type == .keyUp else {
-                return Unmanaged.passUnretained(event)
-            }
-
             let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
             let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) == 1
 
-            DispatchQueue.main.async {
-                instance.onEvent?(type == .keyDown ? .down : .up, keyCode, isAutorepeat)
+            if type == .keyDown || type == .keyUp {
+                if !instance.firstEventLogged {
+                    instance.firstEventLogged = true
+                    NSLog("Keyboard events are flowing via CGEvent tap (first event keyCode=\(keyCode), type=\(type.rawValue))")
+                }
+                DispatchQueue.main.async {
+                    instance.onEvent?(type == .keyDown ? .down : .up, keyCode, isAutorepeat)
+                }
+                return Unmanaged.passUnretained(event)
+            }
+
+            if type == .flagsChanged {
+                guard let modifierEvent = instance.modifierEventType(for: keyCode, flags: event.flags) else {
+                    return Unmanaged.passUnretained(event)
+                }
+                DispatchQueue.main.async {
+                    instance.onEvent?(modifierEvent, keyCode, false)
+                }
             }
 
             return Unmanaged.passUnretained(event)
@@ -849,7 +969,8 @@ final class GlobalKeyEventTap {
             callback: callback,
             userInfo: ref
         ) else {
-            return false
+            NSLog("CGEvent tap creation failed. Trying NSEvent global monitor fallback.")
+            return startGlobalMonitorFallback()
         }
 
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
@@ -860,6 +981,7 @@ final class GlobalKeyEventTap {
 
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        NSLog("Using CGEvent tap keyboard capture")
         return true
     }
 
@@ -870,8 +992,65 @@ final class GlobalKeyEventTap {
         if let tap = eventTap {
             CFMachPortInvalidate(tap)
         }
+        if let monitor = globalMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
         runLoopSource = nil
         eventTap = nil
+        globalMonitor = nil
+    }
+
+    private func startGlobalMonitorFallback() -> Bool {
+        let monitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.keyDown, .keyUp, .flagsChanged]
+        ) { [weak self] event in
+            guard let self else { return }
+            switch event.type {
+            case .keyDown:
+                if !self.firstEventLogged {
+                    self.firstEventLogged = true
+                    NSLog("Keyboard events are flowing via NSEvent global monitor (first keyDown keyCode=\(event.keyCode))")
+                }
+                self.onEvent?(.down, Int(event.keyCode), event.isARepeat)
+            case .keyUp:
+                self.onEvent?(.up, Int(event.keyCode), false)
+            case .flagsChanged:
+                let flags = CGEventFlags(rawValue: UInt64(event.modifierFlags.rawValue))
+                guard let modifierEvent = self.modifierEventType(for: Int(event.keyCode), flags: flags) else {
+                    return
+                }
+                self.onEvent?(modifierEvent, Int(event.keyCode), false)
+            default:
+                return
+            }
+        }
+
+        guard let monitor else {
+            NSLog("Global keyboard monitor fallback failed to start")
+            return false
+        }
+        globalMonitor = monitor
+        NSLog("Using NSEvent global keyboard monitor fallback")
+        return true
+    }
+
+    private func modifierEventType(for keyCode: Int, flags: CGEventFlags) -> KeyEventType? {
+        let isDown: Bool
+        switch keyCode {
+        case 55, 54:
+            isDown = flags.contains(.maskCommand)
+        case 58, 61:
+            isDown = flags.contains(.maskAlternate)
+        case 59, 62:
+            isDown = flags.contains(.maskControl)
+        case 56, 60:
+            isDown = flags.contains(.maskShift)
+        case 57:
+            isDown = flags.contains(.maskAlphaShift)
+        default:
+            return nil
+        }
+        return isDown ? .down : .up
     }
 }
 
@@ -913,8 +1092,11 @@ final class ClickSoundEngine {
     var spaceLevel: Float = 1.1
     var dynamicCompensationGain: Float = 1.0
     var typingSpeedGain: Float = 1.0
+    var stackModeEnabled: Bool = false
+    var stackDensity: Float = 0.55
     var limiterEnabled: Bool = true
     var limiterDrive: Float = 1.2
+    private var lastDownHitTime: CFAbsoluteTime = 0
 
     private struct SampleBank {
         var keyDown: [AVAudioPCMBuffer]
@@ -1165,14 +1347,29 @@ final class ClickSoundEngine {
 
         var gainJitter = Float.random(in: -variation ... variation) * 0.18
         if autorepeat { gainJitter -= 0.1 }
-        let gain = (masterVolume * keyLevel * dynamicCompensationGain * typingSpeedGain + gainJitter).clamped(to: 0.03 ... 2.8)
-        schedule(pool.randomElement(), gain: gain)
+        var gain = (masterVolume * keyLevel * dynamicCompensationGain * typingSpeedGain + gainJitter).clamped(to: 0.03 ... 2.8)
+        var interrupt = false
+        if stackModeEnabled {
+            let now = CFAbsoluteTimeGetCurrent()
+            let dt = now - lastDownHitTime
+            lastDownHitTime = now
+            let density = stackDensity.clamped(to: 0.0 ... 1.0)
+            let proximity = Float(max(0.0, 1.0 - dt / 0.18))
+            let stackBoost = 1.0 + (density * density) * proximity * 3.2
+            gain = (gain * stackBoost).clamped(to: 0.03 ... 3.4)
+            interrupt = density > 0.6 && proximity > 0.45
+        }
+        schedule(pool.randomElement(), gain: gain, interruptIfNeeded: interrupt)
     }
 
     func playUp(for keyCode: Int) {
         guard engine.isRunning else { return }
-        if keyCode == 56 || keyCode == 60 || keyCode == 59 || keyCode == 62 {
-            return
+        if stackModeEnabled {
+            // In stack mode, aggressively trim release tails at high density.
+            let keepProbability = (1.0 - stackDensity).clamped(to: 0.02 ... 1.0)
+            if Float.random(in: 0 ... 1) > keepProbability {
+                return
+            }
         }
         let pool: [AVAudioPCMBuffer]
         switch keyCode {
@@ -1181,14 +1378,18 @@ final class ClickSoundEngine {
         case 51, 117: pool = bank.backspaceUp
         default: pool = bank.keyUp
         }
-        let gain = (masterVolume * releaseLevel * dynamicCompensationGain * typingSpeedGain + Float.random(in: -variation ... variation) * 0.08).clamped(to: 0.02 ... 1.3)
-        schedule(pool.randomElement(), gain: gain)
+        var gain = (masterVolume * releaseLevel * dynamicCompensationGain * typingSpeedGain + Float.random(in: -variation ... variation) * 0.08).clamped(to: 0.02 ... 1.3)
+        if stackModeEnabled {
+            let tailCut = (1.0 - stackDensity * 0.9).clamped(to: 0.08 ... 1.0)
+            gain = (gain * tailCut).clamped(to: 0.01 ... 1.3)
+        }
+        let interrupt = stackModeEnabled
+        schedule(pool.randomElement(), gain: gain, interruptIfNeeded: interrupt)
     }
 
-    private func schedule(_ buffer: AVAudioPCMBuffer?, gain: Float) {
+    private func schedule(_ buffer: AVAudioPCMBuffer?, gain: Float, interruptIfNeeded: Bool) {
         guard let buffer else { return }
         engine.mainMixerNode.outputVolume = masterVolume
-
         // Duplicate buffer with per-hit gain for low-latency playback without re-synthesis.
         guard let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: buffer.frameCapacity) else { return }
         copy.frameLength = buffer.frameLength
@@ -1201,16 +1402,21 @@ final class ClickSoundEngine {
             for i in 0 ..< frames {
                 let pre = src[i] * gain
                 if limiterEnabled {
-                    // Soft limiter with unity low-level slope. Higher drive => earlier compression, not loudness boost.
+                    // Audible drive control in normal typing:
+                    // blend clean signal with driven soft-clip curve.
                     let drive = max(0.6, limiterDrive)
-                    dst[i] = Float(tanh(Double(pre * drive)) / Double(drive))
+                    let shaped = Float(tanh(Double(pre * drive)) / tanh(Double(drive)))
+                    let mix = ((drive - 0.6) / 1.4).clamped(to: 0.0 ... 1.0)
+                    dst[i] = pre * (1 - mix) + shaped * mix
                 } else {
                     dst[i] = pre.clamped(to: -1.0 ... 1.0)
                 }
             }
         }
 
-        player.scheduleBuffer(copy, at: nil, options: .interruptsAtLoop, completionHandler: nil)
+        // Only allow interruption for release tails; keep key-down attacks stable.
+        let options: AVAudioPlayerNodeBufferOptions = interruptIfNeeded ? [.interrupts] : []
+        player.scheduleBuffer(copy, at: nil, options: options, completionHandler: nil)
         if !player.isPlaying {
             player.play()
         }
