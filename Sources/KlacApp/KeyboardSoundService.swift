@@ -345,22 +345,36 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     func restartApplication() {
-        guard let appURL = resolveAppBundleURL() else {
-            NSLog("Failed to resolve app bundle URL for relaunch")
+        if let appURL = resolveAppBundleURL() {
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = false
+            config.createsNewApplicationInstance = true
+            NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, error in
+                if let error {
+                    NSLog("Primary relaunch failed: \(error). Falling back to detached open.")
+                    DispatchQueue.main.async { [weak self] in
+                        self?.relaunchWithDetachedOpen(appURL: appURL)
+                    }
+                    return
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    NSApplication.shared.terminate(nil)
+                }
+            }
             return
         }
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = false
-        config.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, error in
-            if let error {
-                NSLog("Primary relaunch failed: \(error). Falling back to detached open.")
-                self.relaunchWithDetachedOpen(appURL: appURL)
-                return
-            }
+
+        // Development run (e.g. `swift run`) without a .app bundle.
+        guard let executableURL = Bundle.main.executableURL else {
+            NSLog("Failed to resolve app bundle or executable URL for relaunch")
+            return
+        }
+        if relaunchWithDetachedExecutable(executableURL: executableURL) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                 NSApplication.shared.terminate(nil)
             }
+        } else {
+            accessActionHint = "Не удалось автоматом перезапустить dev-сборку. Закрой приложение и запусти снова через swift run."
         }
     }
 
@@ -378,6 +392,22 @@ final class KeyboardSoundService: ObservableObject {
             }
         } catch {
             NSLog("Detached relaunch failed: \(error)")
+        }
+    }
+
+    private func relaunchWithDetachedExecutable(executableURL: URL) -> Bool {
+        let escapedPath = executableURL.path.replacingOccurrences(of: "'", with: "'\\''")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
+        process.arguments = ["/bin/sh", "-c", "sleep 0.35; '\(escapedPath)' >/dev/null 2>&1 &"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            return true
+        } catch {
+            NSLog("Detached executable relaunch failed: \(error)")
+            return false
         }
     }
 
@@ -419,11 +449,6 @@ final class KeyboardSoundService: ObservableObject {
             }
         }
 
-        // Installed path fallback.
-        let installed = URL(fileURLWithPath: "/Applications/Klac.app")
-        if FileManager.default.fileExists(atPath: installed.path) {
-            return installed
-        }
         return nil
     }
 
@@ -1357,7 +1382,7 @@ final class ClickSoundEngine {
             let proximity = Float(max(0.0, 1.0 - dt / 0.18))
             let stackBoost = 1.0 + (density * density) * proximity * 3.2
             gain = (gain * stackBoost).clamped(to: 0.03 ... 3.4)
-            interrupt = density > 0.6 && proximity > 0.45
+            interrupt = density > 0.25
         }
         schedule(pool.randomElement(), gain: gain, interruptIfNeeded: interrupt)
     }
@@ -1365,8 +1390,12 @@ final class ClickSoundEngine {
     func playUp(for keyCode: Int) {
         guard engine.isRunning else { return }
         if stackModeEnabled {
+            let density = stackDensity.clamped(to: 0.0 ... 1.0)
+            if density >= 0.65 {
+                return
+            }
             // In stack mode, aggressively trim release tails at high density.
-            let keepProbability = (1.0 - stackDensity).clamped(to: 0.02 ... 1.0)
+            let keepProbability = (1.0 - density).clamped(to: 0.02 ... 1.0)
             if Float.random(in: 0 ... 1) > keepProbability {
                 return
             }
@@ -1383,7 +1412,7 @@ final class ClickSoundEngine {
             let tailCut = (1.0 - stackDensity * 0.9).clamped(to: 0.08 ... 1.0)
             gain = (gain * tailCut).clamped(to: 0.01 ... 1.3)
         }
-        let interrupt = stackModeEnabled
+        let interrupt = stackModeEnabled && stackDensity > 0.25
         schedule(pool.randomElement(), gain: gain, interruptIfNeeded: interrupt)
     }
 

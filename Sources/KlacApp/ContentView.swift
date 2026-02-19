@@ -6,7 +6,7 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var systemColorScheme
     @State private var showAdvancedPopover = false
     @State private var showAccessHintPopover = false
-    private let panelWidth: CGFloat = 320
+    private let panelWidth: CGFloat = 306
 
     var body: some View {
         ZStack {
@@ -16,20 +16,27 @@ struct ContentView: View {
                 endPoint: .bottomTrailing
             )
             .overlay {
-                Circle()
-                    .fill(accentBlobColor)
-                    .frame(width: 200, height: 200)
-                    .blur(radius: 26)
-                    .offset(x: 90, y: -100)
+                ZStack {
+                    Circle()
+                        .fill(accentBlobColor)
+                        .frame(width: 220, height: 220)
+                        .blur(radius: 28)
+                        .offset(x: 96, y: -118)
+                    Circle()
+                        .fill(secondaryBlobColor)
+                        .frame(width: 160, height: 160)
+                        .blur(radius: 24)
+                        .offset(x: -84, y: 108)
+                }
             }
 
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
                 header
-                permissionsCard
-                quickSoundCard
+                compactMainCard
+                quickActions
                 footer
             }
-            .padding(14)
+            .padding(10)
             .frame(width: panelWidth, alignment: .leading)
         }
         .onAppear {
@@ -73,11 +80,39 @@ struct ContentView: View {
         isDarkTheme ? Color.cyan.opacity(0.18) : Color.blue.opacity(0.16)
     }
 
+    private var secondaryBlobColor: Color {
+        isDarkTheme ? Color.mint.opacity(0.14) : Color.white.opacity(0.42)
+    }
+
+    private var captureStatusTitle: String {
+        service.capturingKeyboard ? "Активно" : "Нет доступа"
+    }
+
+    private var captureStatusDetail: String {
+        service.capturingKeyboard ? "Глобальный перехват клавиш включён" : "Нужны Accessibility + Input Monitoring"
+    }
+
+    private var appVersionCaption: String {
+        let releaseFallbackVersion = "1.4.1"
+        let short = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let version = (short?.isEmpty == false) ? short! : releaseFallbackVersion
+        let buildPart = (build?.isEmpty == false) ? "b\(build!)" : "bdev"
+        return "v\(version) (\(buildPart))"
+    }
+
     private var header: some View {
         HStack {
-            Text("Klac")
-                .font(.system(size: 22, weight: .semibold, design: .rounded))
-                .foregroundStyle(.primary)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("Klac")
+                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
+                Text(appVersionCaption)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary.opacity(0.75))
+            }
             Spacer()
             HStack(spacing: 10) {
                 Button {
@@ -103,67 +138,46 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var permissionsCard: some View {
-        GlassCard(title: "Права доступа") {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(service.capturingKeyboard ? "Перехват клавиш активен." : "Нужны доступы: Универсальный доступ и Мониторинг ввода.")
-                    .foregroundStyle(.primary)
-
-                Text(service.capturingKeyboard
-                     ? "Все разрешения выданы."
-                     : "Если не работает — включи Универсальный доступ и Мониторинг ввода, затем нажми «Восстановить».")
+    private var compactMainCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(captureStatusTitle)
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
                     .foregroundStyle(service.capturingKeyboard ? .green : .orange)
-                    .font(.footnote)
-
-                Text("Доступность: \(service.accessibilityGranted ? "OK" : "Нет") · Мониторинг ввода: \(service.inputMonitoringGranted ? "OK" : "Нет")")
-                    .foregroundStyle(.secondary)
-                    .font(.footnote)
-
-                HStack(spacing: 8) {
-                    Button("Проверить") {
-                        service.refreshAccessibilityStatus(promptIfNeeded: true)
-                    }
-                    .buttonStyle(PrimaryGlassButtonStyle())
-                    .frame(maxWidth: .infinity)
-
-                    Button("Восстановить") {
-                        service.runAccessRecoveryWizard()
-                    }
-                    .buttonStyle(PrimaryGlassButtonStyle())
-                    .frame(maxWidth: .infinity)
+                Spacer()
+                Button {
+                    showAccessHintPopover.toggle()
+                } label: {
+                    Image(systemName: "questionmark.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
                 }
-
-                HStack {
-                    Spacer()
-                    Button {
-                        showAccessHintPopover.toggle()
-                    } label: {
-                        Image(systemName: "questionmark.circle")
-                            .font(.system(size: 15, weight: .semibold))
+                .buttonStyle(PrimaryGlassButtonStyle())
+                .frame(width: 34, height: 28)
+                .popover(isPresented: $showAccessHintPopover, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Подсказка")
+                            .font(.headline)
+                        Text(service.accessActionHint ?? "Нажми «Проверить». Если не помогло, нажми «Восстановить», выдай доступ и перезапусти приложение.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .buttonStyle(PrimaryGlassButtonStyle())
-                    .frame(width: 34, height: 28)
-                    .popover(isPresented: $showAccessHintPopover, arrowEdge: .bottom) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Подсказка")
-                                .font(.headline)
-                            Text(service.accessActionHint ?? "Нажми «Проверить». Если не помогло, нажми «Восстановить», выдай доступ и перезапусти приложение.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(12)
-                        .frame(width: 320)
-                    }
+                    .padding(12)
+                    .frame(width: 320)
                 }
             }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
 
-    private var quickSoundCard: some View {
-        GlassCard(title: "Свитчи") {
-            VStack(alignment: .leading, spacing: 10) {
+            Text(captureStatusDetail)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                statusPill(title: "AX", enabled: service.accessibilityGranted)
+                statusPill(title: "Input", enabled: service.inputMonitoringGranted)
+                statusPill(title: "Tap", enabled: service.capturingKeyboard)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
                 Picker("Профиль", selection: $service.selectedProfile) {
                     ForEach(SoundProfile.allCases) { profile in
                         Text(profile.title).tag(profile)
@@ -171,19 +185,48 @@ struct ContentView: View {
                 }
                 .pickerStyle(.menu)
                 .tint(.primary)
-
-                Button("Тест звука") {
-                    service.playTestSound()
-                }
-                .buttonStyle(PrimaryGlassButtonStyle())
             }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(.white.opacity(isDarkTheme ? 0.14 : 0.28), lineWidth: 1)
+        }
+    }
+
+    private var quickActions: some View {
+        HStack(spacing: 8) {
+            Button("Тест") { service.playTestSound() }
+                .buttonStyle(PrimaryGlassButtonStyle())
+                .frame(maxWidth: .infinity)
+            Button("Проверить") { service.refreshAccessibilityStatus(promptIfNeeded: true) }
+                .buttonStyle(PrimaryGlassButtonStyle())
+                .frame(maxWidth: .infinity)
+            Button("Восст.") { service.runAccessRecoveryWizard() }
+                .buttonStyle(PrimaryGlassButtonStyle())
+                .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func statusPill(title: String, enabled: Bool) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .foregroundStyle(enabled ? .green : .orange)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.thinMaterial, in: Capsule())
+            .overlay {
+                Capsule()
+                    .strokeBorder((enabled ? Color.green : Color.orange).opacity(0.35), lineWidth: 1)
+            }
+    }
+
     private var footer: some View {
         HStack {
-            Text("Работает в фоне.")
+            Text(service.isEnabled ? "Работает в фоне." : "Отключено.")
                 .foregroundStyle(.secondary)
                 .font(.footnote)
             Spacer()
