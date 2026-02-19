@@ -36,7 +36,7 @@ final class StatusBarController: NSObject {
 
         let view = ContentView()
             .environmentObject(service)
-            .frame(width: 344, height: 308)
+            .frame(width: 300, height: 236)
 
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: view)

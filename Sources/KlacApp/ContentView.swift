@@ -6,7 +6,7 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var systemColorScheme
     @State private var showAdvancedPopover = false
     @State private var showAccessHintPopover = false
-    private let panelWidth: CGFloat = 306
+    private let panelWidth: CGFloat = 282
 
     var body: some View {
         ZStack {
@@ -30,13 +30,13 @@ struct ContentView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
                 header
                 compactMainCard
                 quickActions
-                footer
             }
-            .padding(10)
+            .padding(.horizontal, 0)
+            .padding(.vertical, 0)
             .frame(width: panelWidth, alignment: .leading)
         }
         .onAppear {
@@ -93,7 +93,7 @@ struct ContentView: View {
     }
 
     private var appVersionCaption: String {
-        let releaseFallbackVersion = "1.4.1"
+        let releaseFallbackVersion = "1.4.3"
         let short = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)?
@@ -108,10 +108,10 @@ struct ContentView: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text("Klac")
                     .font(.system(size: 22, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(primaryTextColor)
                 Text(appVersionCaption)
                     .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(.secondary.opacity(0.75))
+                    .foregroundStyle(secondaryTextColor)
             }
             Spacer()
             HStack(spacing: 10) {
@@ -121,15 +121,15 @@ struct ContentView: View {
                     Image(systemName: "gearshape.fill")
                         .font(.system(size: 14, weight: .semibold))
                 }
-                .buttonStyle(PrimaryGlassButtonStyle())
+                .buttonStyle(MinimalLiquidActionButtonStyle())
                 .popover(isPresented: $showAdvancedPopover, arrowEdge: .top) {
                     AdvancedSettingsView(service: service)
                 }
 
-                Toggle("Вкл", isOn: $service.isEnabled)
+                Toggle("", isOn: $service.isEnabled)
                     .toggleStyle(.switch)
                     .tint(.cyan)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(primaryTextColor)
                     .onChange(of: service.isEnabled) { enabled in
                         enabled ? service.start() : service.stop()
                     }
@@ -139,7 +139,7 @@ struct ContentView: View {
     }
 
     private var compactMainCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
                 Text(captureStatusTitle)
                     .font(.system(size: 20, weight: .semibold, design: .rounded))
@@ -151,7 +151,7 @@ struct ContentView: View {
                     Image(systemName: "questionmark.circle.fill")
                         .font(.system(size: 14, weight: .semibold))
                 }
-                .buttonStyle(PrimaryGlassButtonStyle())
+                .buttonStyle(MinimalLiquidActionButtonStyle())
                 .frame(width: 34, height: 28)
                 .popover(isPresented: $showAccessHintPopover, arrowEdge: .bottom) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -167,11 +167,7 @@ struct ContentView: View {
                 }
             }
 
-            Text(captureStatusDetail)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 statusPill(title: "AX", enabled: service.accessibilityGranted)
                 statusPill(title: "Input", enabled: service.inputMonitoringGranted)
                 statusPill(title: "Tap", enabled: service.capturingKeyboard)
@@ -188,7 +184,7 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
+        .padding(7)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -197,18 +193,34 @@ struct ContentView: View {
     }
 
     private var quickActions: some View {
-        HStack(spacing: 8) {
-            Button("Тест") { service.playTestSound() }
-                .buttonStyle(PrimaryGlassButtonStyle())
-                .frame(maxWidth: .infinity)
+        HStack(alignment: .bottom, spacing: 6) {
             Button("Проверить") { service.refreshAccessibilityStatus(promptIfNeeded: true) }
-                .buttonStyle(PrimaryGlassButtonStyle())
-                .frame(maxWidth: .infinity)
+                .buttonStyle(MinimalLiquidActionButtonStyle())
+                .frame(width: 106)
             Button("Восст.") { service.runAccessRecoveryWizard() }
-                .buttonStyle(PrimaryGlassButtonStyle())
-                .frame(maxWidth: .infinity)
+                .buttonStyle(MinimalLiquidActionButtonStyle())
+                .frame(width: 96)
+            Spacer(minLength: 0)
+            VStack(alignment: .trailing, spacing: 2) {
+                Button {
+                    NSApplication.shared.terminate(nil)
+                } label: {
+                    Image(systemName: "power")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .buttonStyle(MinimalLiquidActionButtonStyle())
+                .help("Выход")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var primaryTextColor: Color {
+        isDarkTheme ? .white.opacity(0.96) : Color(red: 0.17, green: 0.21, blue: 0.27)
+    }
+
+    private var secondaryTextColor: Color {
+        isDarkTheme ? .white.opacity(0.72) : Color(red: 0.34, green: 0.40, blue: 0.50)
     }
 
     private func statusPill(title: String, enabled: Bool) -> some View {
@@ -222,24 +234,6 @@ struct ContentView: View {
                 Capsule()
                     .strokeBorder((enabled ? Color.green : Color.orange).opacity(0.35), lineWidth: 1)
             }
-    }
-
-    private var footer: some View {
-        HStack {
-            Text(service.isEnabled ? "Работает в фоне." : "Отключено.")
-                .foregroundStyle(.secondary)
-                .font(.footnote)
-            Spacer()
-            Button {
-                NSApplication.shared.terminate(nil)
-            } label: {
-                Image(systemName: "power")
-                    .font(.system(size: 15, weight: .semibold))
-            }
-            .buttonStyle(PrimaryGlassButtonStyle())
-            .help("Выход")
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -469,5 +463,21 @@ private struct PrimaryGlassButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(Color.primary.opacity(configuration.isPressed ? 0.30 : 0.38), lineWidth: 1)
             )
+    }
+}
+
+private struct MinimalLiquidActionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .medium, design: .rounded))
+            .foregroundStyle(Color(red: 0.18, green: 0.23, blue: 0.30).opacity(configuration.isPressed ? 0.88 : 0.98))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay {
+                Capsule()
+                    .strokeBorder(Color.white.opacity(configuration.isPressed ? 0.18 : 0.30), lineWidth: 0.9)
+            }
+            .scaleEffect(configuration.isPressed ? 0.985 : 1.0)
     }
 }
