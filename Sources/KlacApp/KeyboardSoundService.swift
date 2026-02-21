@@ -96,6 +96,7 @@ final class KeyboardSoundService: ObservableObject {
     @Published var dynamicCompensationEnabled = false {
         didSet {
             defaults.set(dynamicCompensationEnabled, forKey: Keys.dynamicCompensationEnabled)
+            updateSystemVolumeMonitoringState()
             updateDynamicCompensation()
         }
     }
@@ -108,6 +109,7 @@ final class KeyboardSoundService: ObservableObject {
     @Published var typingAdaptiveEnabled = false {
         didSet {
             defaults.set(typingAdaptiveEnabled, forKey: Keys.typingAdaptiveEnabled)
+            updateTypingDecayMonitoringState()
             updateTypingAdaptation()
         }
     }
@@ -256,8 +258,8 @@ final class KeyboardSoundService: ObservableObject {
         soundEngine.stackModeEnabled = stackModeEnabled
         soundEngine.stackDensity = Float(stackDensity)
         soundEngine.setProfile(selectedProfile)
-        startSystemVolumeMonitoring()
-        startTypingDecayMonitoring()
+        updateSystemVolumeMonitoringState()
+        updateTypingDecayMonitoringState()
         updateDynamicCompensation()
         updateTypingAdaptation()
         refreshAccessibilityStatus(promptIfNeeded: false)
@@ -659,6 +661,21 @@ final class KeyboardSoundService: ObservableObject {
         pollSystemVolume()
     }
 
+    private func stopSystemVolumeMonitoring() {
+        systemVolumeTimer?.invalidate()
+        systemVolumeTimer = nil
+    }
+
+    private func updateSystemVolumeMonitoringState() {
+        if dynamicCompensationEnabled {
+            if systemVolumeTimer == nil {
+                startSystemVolumeMonitoring()
+            }
+        } else {
+            stopSystemVolumeMonitoring()
+        }
+    }
+
     private func pollSystemVolume() {
         Task.detached(priority: .background) { [weak self] in
             guard let self else { return }
@@ -668,14 +685,19 @@ final class KeyboardSoundService: ObservableObject {
             let deviceUID = deviceID != 0 ? (Self.readOutputDeviceUID(deviceID) ?? "") : ""
             let deviceName = deviceID != 0 ? (Self.readOutputDeviceName(deviceID) ?? "Системное устройство") : "Системное устройство"
             await MainActor.run {
-                self.lastSystemVolume = normalized
+                let volumeChanged = abs(self.lastSystemVolume - normalized) > 0.005
+                if volumeChanged {
+                    self.lastSystemVolume = normalized
+                }
                 if deviceID != self.lastOutputDeviceID || deviceUID != self.currentOutputDeviceUID {
                     self.lastOutputDeviceID = deviceID
                     self.currentOutputDeviceUID = deviceUID
                     self.currentOutputDeviceName = deviceName
                     self.currentOutputDeviceBoost = self.outputDeviceBoosts[deviceUID] ?? 1.0
                 }
-                self.updateDynamicCompensation()
+                if volumeChanged || self.dynamicCompensationEnabled {
+                    self.updateDynamicCompensation()
+                }
             }
         }
     }
@@ -691,7 +713,10 @@ final class KeyboardSoundService: ObservableObject {
         let gain = (1.0 + lowVolumeFactor * (0.4 + compensationStrength * 2.6)) * currentOutputDeviceBoost
         let clamped = Float(gain).clamped(to: 1.0 ... 4.0)
         soundEngine.dynamicCompensationGain = clamped
-        liveDynamicGain = Double(clamped)
+        let next = Double(clamped)
+        if abs(liveDynamicGain - next) > 0.005 {
+            liveDynamicGain = next
+        }
     }
 
     private func trackTypingHit() {
@@ -713,12 +738,32 @@ final class KeyboardSoundService: ObservableObject {
         }
     }
 
+    private func stopTypingDecayMonitoring() {
+        typingDecayTimer?.invalidate()
+        typingDecayTimer = nil
+    }
+
+    private func updateTypingDecayMonitoringState() {
+        if typingAdaptiveEnabled {
+            if typingDecayTimer == nil {
+                startTypingDecayMonitoring()
+            }
+        } else {
+            stopTypingDecayMonitoring()
+        }
+    }
+
     private func recomputeTypingSpeed(now: CFAbsoluteTime) {
         let windowStart = now - 3.0
         typingTimestamps.removeAll { $0 < windowStart }
         let cps = Double(typingTimestamps.count) / 3.0
-        typingCPS = cps
-        typingWPM = cps * 12.0
+        if abs(typingCPS - cps) > 0.03 {
+            typingCPS = cps
+        }
+        let wpm = cps * 12.0
+        if abs(typingWPM - wpm) > 0.4 {
+            typingWPM = wpm
+        }
         personalBaselineCPS = personalBaselineCPS * 0.985 + cps * 0.015
     }
 
@@ -734,7 +779,9 @@ final class KeyboardSoundService: ObservableObject {
         let gain = 1.0 + 0.25 + normalized * 0.95
         let clamped = gain.clamped(to: 1.0 ... 2.5)
         soundEngine.typingSpeedGain = Float(clamped)
-        liveTypingGain = clamped
+        if abs(liveTypingGain - clamped) > 0.005 {
+            liveTypingGain = clamped
+        }
     }
 
     private func saveCurrentDeviceBoost() {
