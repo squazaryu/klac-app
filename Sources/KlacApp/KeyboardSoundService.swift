@@ -160,6 +160,7 @@ final class KeyboardSoundService: ObservableObject {
     @Published var capturingKeyboard = false
     private let defaults = UserDefaults.standard
     private var systemVolumeTimer: Timer?
+    private var systemMonitorInterval: TimeInterval = 0
     private var lastSystemVolume: Double = 1.0
     private var lastOutputDeviceID: AudioObjectID = 0
     private var outputDeviceBoosts: [String: Double] = [:]
@@ -651,9 +652,10 @@ final class KeyboardSoundService: ObservableObject {
         }
     }
 
-    private func startSystemVolumeMonitoring() {
+    private func startSystemVolumeMonitoring(interval: TimeInterval) {
         systemVolumeTimer?.invalidate()
-        systemVolumeTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: true) { [weak self] _ in
+        systemMonitorInterval = interval
+        systemVolumeTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.pollSystemVolume()
             }
@@ -667,12 +669,10 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func updateSystemVolumeMonitoringState() {
-        if dynamicCompensationEnabled {
-            if systemVolumeTimer == nil {
-                startSystemVolumeMonitoring()
-            }
-        } else {
-            stopSystemVolumeMonitoring()
+        // Keep a lightweight monitor always to detect output-device changes.
+        let targetInterval: TimeInterval = dynamicCompensationEnabled ? 0.35 : 1.2
+        if systemVolumeTimer == nil || abs(systemMonitorInterval - targetInterval) > 0.001 {
+            startSystemVolumeMonitoring(interval: targetInterval)
         }
     }
 
@@ -694,6 +694,7 @@ final class KeyboardSoundService: ObservableObject {
                     self.currentOutputDeviceUID = deviceUID
                     self.currentOutputDeviceName = deviceName
                     self.currentOutputDeviceBoost = self.outputDeviceBoosts[deviceUID] ?? 1.0
+                    self.soundEngine.handleOutputDeviceChanged()
                 }
                 if volumeChanged || self.dynamicCompensationEnabled {
                     self.updateDynamicCompensation()
@@ -1153,8 +1154,8 @@ enum SoundProfile: String, CaseIterable, Identifiable {
 }
 
 final class ClickSoundEngine {
-    private let engine = AVAudioEngine()
-    private let player = AVAudioPlayerNode()
+    private var engine = AVAudioEngine()
+    private var player = AVAudioPlayerNode()
     private let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
 
     var masterVolume: Float = 0.75
@@ -1199,11 +1200,10 @@ final class ClickSoundEngine {
         case backspaceDown, backspaceUp
     }
     private var lastSampleIndexByGroup: [SampleGroup: Int] = [:]
+    private var lastOutputDeviceReinit: CFAbsoluteTime = 0
 
     init() {
-        engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: format)
-        engine.mainMixerNode.outputVolume = masterVolume
+        rebuildAudioGraph()
     }
 
     func setProfile(_ profile: SoundProfile) {
@@ -1402,6 +1402,30 @@ final class ClickSoundEngine {
     func stop() {
         player.stop()
         engine.stop()
+    }
+
+    func handleOutputDeviceChanged() {
+        let wasRunning = engine.isRunning
+        let now = CFAbsoluteTimeGetCurrent()
+        // Debounce noisy route notifications.
+        if now - lastOutputDeviceReinit < 0.45 { return }
+        lastOutputDeviceReinit = now
+
+        rebuildAudioGraph()
+        if wasRunning {
+            startIfNeeded()
+        }
+        NSLog("Audio engine graph rebuilt after output-device change")
+    }
+
+    private func rebuildAudioGraph() {
+        let newEngine = AVAudioEngine()
+        let newPlayer = AVAudioPlayerNode()
+        newEngine.attach(newPlayer)
+        newEngine.connect(newPlayer, to: newEngine.mainMixerNode, format: format)
+        newEngine.mainMixerNode.outputVolume = masterVolume
+        engine = newEngine
+        player = newPlayer
     }
 
     func playDown(for keyCode: Int, autorepeat: Bool) {
