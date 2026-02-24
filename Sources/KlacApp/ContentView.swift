@@ -93,7 +93,7 @@ struct ContentView: View {
     }
 
     private var appVersionCaption: String {
-        let releaseFallbackVersion = "1.5.0"
+        let releaseFallbackVersion = "1.5.1"
         let short = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)?
@@ -467,17 +467,31 @@ private struct PrimaryGlassButtonStyle: ButtonStyle {
 }
 
 private struct MinimalLiquidActionButtonStyle: ButtonStyle {
+    @Environment(\.colorScheme) private var colorScheme
+
     func makeBody(configuration: Configuration) -> some View {
+        let isDark = colorScheme == .dark
+        let foreground = isDark
+            ? Color.white.opacity(configuration.isPressed ? 0.86 : 0.96)
+            : Color(red: 0.18, green: 0.23, blue: 0.30).opacity(configuration.isPressed ? 0.88 : 0.98)
+        let fill = isDark
+            ? Color.white.opacity(configuration.isPressed ? 0.18 : 0.14)
+            : Color.white.opacity(configuration.isPressed ? 0.36 : 0.28)
+        let stroke = isDark
+            ? Color.white.opacity(configuration.isPressed ? 0.55 : 0.46)
+            : Color.white.opacity(configuration.isPressed ? 0.26 : 0.30)
+
         configuration.label
             .font(.system(size: 13, weight: .medium, design: .rounded))
-            .foregroundStyle(Color(red: 0.18, green: 0.23, blue: 0.30).opacity(configuration.isPressed ? 0.88 : 0.98))
+            .foregroundStyle(foreground)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
+            .background(Capsule().fill(fill))
             .overlay {
                 Capsule()
-                    .strokeBorder(Color.white.opacity(configuration.isPressed ? 0.18 : 0.30), lineWidth: 0.9)
+                    .strokeBorder(stroke, lineWidth: 1.0)
             }
+            .shadow(color: isDark ? .black.opacity(0.26) : .clear, radius: isDark ? 2 : 0, x: 0, y: 1)
             .scaleEffect(configuration.isPressed ? 0.985 : 1.0)
     }
 }

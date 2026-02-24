@@ -1192,6 +1192,13 @@ final class ClickSoundEngine {
         backspaceUp: []
     )
     private var customPackRoot: URL?
+    private enum SampleGroup: Hashable {
+        case keyDown, keyUp
+        case spaceDown, spaceUp
+        case enterDown, enterUp
+        case backspaceDown, backspaceUp
+    }
+    private var lastSampleIndexByGroup: [SampleGroup: Int] = [:]
 
     init() {
         engine.attach(player)
@@ -1401,23 +1408,29 @@ final class ClickSoundEngine {
         guard engine.isRunning else { return }
 
         let pool: [AVAudioPCMBuffer]
+        let group: SampleGroup
         let keyLevel: Float
         switch keyCode {
         case 49:
             pool = bank.spaceDown
+            group = .spaceDown
             keyLevel = spaceLevel
         case 36, 76:
             pool = bank.enterDown
+            group = .enterDown
             keyLevel = (pressLevel + spaceLevel) * 0.5
         case 51, 117:
             pool = bank.backspaceDown
+            group = .backspaceDown
             keyLevel = pressLevel * 0.95
         default:
             pool = bank.keyDown
+            group = .keyDown
             keyLevel = pressLevel
         }
 
-        var gainJitter = Float.random(in: -variation ... variation) * 0.18
+        let effectiveVariation = max(0.10, variation)
+        var gainJitter = Float.random(in: -effectiveVariation ... effectiveVariation) * 0.34
         if autorepeat { gainJitter -= 0.1 }
         var gain = (masterVolume * keyLevel * dynamicCompensationGain * typingSpeedGain + gainJitter).clamped(to: 0.03 ... 2.8)
         var interrupt = false
@@ -1431,7 +1444,7 @@ final class ClickSoundEngine {
             gain = (gain * stackBoost).clamped(to: 0.03 ... 3.4)
             interrupt = density > 0.25
         }
-        schedule(pool.randomElement(), gain: gain, interruptIfNeeded: interrupt)
+        schedule(pickSample(from: pool, group: group), gain: gain, interruptIfNeeded: interrupt)
     }
 
     func playUp(for keyCode: Int) {
@@ -1448,19 +1461,29 @@ final class ClickSoundEngine {
             }
         }
         let pool: [AVAudioPCMBuffer]
+        let group: SampleGroup
         switch keyCode {
-        case 49: pool = bank.spaceUp
-        case 36, 76: pool = bank.enterUp
-        case 51, 117: pool = bank.backspaceUp
-        default: pool = bank.keyUp
+        case 49:
+            pool = bank.spaceUp
+            group = .spaceUp
+        case 36, 76:
+            pool = bank.enterUp
+            group = .enterUp
+        case 51, 117:
+            pool = bank.backspaceUp
+            group = .backspaceUp
+        default:
+            pool = bank.keyUp
+            group = .keyUp
         }
-        var gain = (masterVolume * releaseLevel * dynamicCompensationGain * typingSpeedGain + Float.random(in: -variation ... variation) * 0.08).clamped(to: 0.02 ... 1.3)
+        let effectiveVariation = max(0.10, variation)
+        var gain = (masterVolume * releaseLevel * dynamicCompensationGain * typingSpeedGain + Float.random(in: -effectiveVariation ... effectiveVariation) * 0.16).clamped(to: 0.02 ... 1.3)
         if stackModeEnabled {
             let tailCut = (1.0 - stackDensity * 0.9).clamped(to: 0.08 ... 1.0)
             gain = (gain * tailCut).clamped(to: 0.01 ... 1.3)
         }
         let interrupt = stackModeEnabled && stackDensity > 0.25
-        schedule(pool.randomElement(), gain: gain, interruptIfNeeded: interrupt)
+        schedule(pickSample(from: pool, group: group), gain: gain, interruptIfNeeded: interrupt)
     }
 
     private func schedule(_ buffer: AVAudioPCMBuffer?, gain: Float, interruptIfNeeded: Bool) {
@@ -1472,11 +1495,18 @@ final class ClickSoundEngine {
 
         let channels = Int(format.channelCount)
         let frames = Int(buffer.frameLength)
+        let panJitter = Float.random(in: -1 ... 1) * variation * 0.14
         for channel in 0 ..< channels {
             guard let src = buffer.floatChannelData?[channel],
                   let dst = copy.floatChannelData?[channel] else { continue }
+            let channelPanGain: Float
+            if channels >= 2 {
+                channelPanGain = channel == 0 ? (1.0 - max(0, panJitter)) : (1.0 + min(0, panJitter))
+            } else {
+                channelPanGain = 1.0
+            }
             for i in 0 ..< frames {
-                let pre = src[i] * gain
+                let pre = src[i] * gain * channelPanGain
                 if limiterEnabled {
                     // Audible drive control in normal typing:
                     // blend clean signal with driven soft-clip curve.
@@ -1496,6 +1526,26 @@ final class ClickSoundEngine {
         if !player.isPlaying {
             player.play()
         }
+    }
+
+    private func pickSample(from pool: [AVAudioPCMBuffer], group: SampleGroup) -> AVAudioPCMBuffer? {
+        guard !pool.isEmpty else { return nil }
+        if pool.count == 1 {
+            lastSampleIndexByGroup[group] = 0
+            return pool[0]
+        }
+
+        let previous = lastSampleIndexByGroup[group]
+        var idx = Int.random(in: 0 ..< pool.count)
+        if let previous {
+            var guardCounter = 0
+            while idx == previous && guardCounter < 4 {
+                idx = Int.random(in: 0 ..< pool.count)
+                guardCounter += 1
+            }
+        }
+        lastSampleIndexByGroup[group] = idx
+        return pool[idx]
     }
 
     private func loadBank(
