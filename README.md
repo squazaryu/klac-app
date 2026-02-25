@@ -107,6 +107,11 @@ tccutil reset ListenEvent com.klacapp.klac
 - Добавлена расширенная диагностика запуска захвата клавиатуры.
 - Улучшен `Stack-режим`: контраст между `0%` и `100%` стал заметно выше.
 
+## Что нового в 1.7.1
+- Исправлена тихая громкость новых Mechvibes-паков (авто-подъем gain для тихих исходников).
+- Добавлен fallback `keyUp` для Mechvibes-паков, чтобы релиз клавиш звучал полноценно.
+- Добавлена сборка `drag-and-drop .dmg` с ярлыком `Applications` внутри образа.
+
 ## Что нового в 1.7.0
 - Добавлены 4 встроенных профиля Mechvibes:
   - `Gateron Browns - Revolt`
@@ -145,7 +150,7 @@ SIGN_IDENTITY="Apple Development: YOUR_NAME (TEAMID)" ./scripts/build_app.sh --i
 ## Релизы в GitHub
 ```bash
 cd "/path/to/project"
-./scripts/release.sh v1.7.0
+./scripts/release.sh v1.7.1
 ```
 
 Что делает `release.sh`:
@@ -157,9 +162,9 @@ cd "/path/to/project"
 
 Полезные флаги:
 ```bash
-./scripts/release.sh v1.7.0 --dry-run
-./scripts/release.sh v1.7.0 --notes-file RELEASE_NOTES.md
-./scripts/release.sh v1.7.0 --skip-push
+./scripts/release.sh v1.7.1 --dry-run
+./scripts/release.sh v1.7.1 --notes-file RELEASE_NOTES.md
+./scripts/release.sh v1.7.1 --skip-push
 ```
 
 ## Лицензия

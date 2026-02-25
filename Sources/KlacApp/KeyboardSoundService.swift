@@ -1725,16 +1725,75 @@ final class ClickSoundEngine {
             return ["\(resourceDirectory)/\(file)"]
         }
 
-        return loadBank(
+        let raw = loadBank(
             keyDown: keyDownFiles.map { "\(resourceDirectory)/\($0)" },
-            keyUp: [],
+            // Many Mechvibes packs don't ship dedicated key-up files.
+            // Reuse key-down files to avoid "half-silent" typing feel on key release.
+            keyUp: keyDownFiles.map { "\(resourceDirectory)/\($0)" },
             spaceDown: prefixed(spaceFile),
-            spaceUp: [],
+            spaceUp: prefixed(spaceFile),
             enterDown: prefixed(enterFile),
-            enterUp: [],
+            enterUp: prefixed(enterFile),
             backspaceDown: prefixed(backspaceFile),
-            backspaceUp: []
+            backspaceUp: prefixed(backspaceFile)
         )
+        return boostedIfQuiet(raw)
+    }
+
+    private func boostedIfQuiet(_ bank: SampleBank) -> SampleBank {
+        let measuredPeak = max(
+            peak(of: bank.keyDown),
+            peak(of: bank.spaceDown),
+            peak(of: bank.enterDown),
+            peak(of: bank.backspaceDown)
+        )
+        guard measuredPeak > 0 else { return bank }
+        let targetPeak: Float = 0.78
+        let gain = (targetPeak / measuredPeak).clamped(to: 1.0 ... 5.0)
+        if gain <= 1.05 { return bank }
+        NSLog("Boosting quiet sound pack by x\(String(format: "%.2f", gain)) (peak=\(String(format: "%.3f", measuredPeak)))")
+        return SampleBank(
+            keyDown: applyGain(bank.keyDown, gain: gain),
+            keyUp: applyGain(bank.keyUp, gain: gain),
+            spaceDown: applyGain(bank.spaceDown, gain: gain),
+            spaceUp: applyGain(bank.spaceUp, gain: gain),
+            enterDown: applyGain(bank.enterDown, gain: gain),
+            enterUp: applyGain(bank.enterUp, gain: gain),
+            backspaceDown: applyGain(bank.backspaceDown, gain: gain),
+            backspaceUp: applyGain(bank.backspaceUp, gain: gain)
+        )
+    }
+
+    private func peak(of buffers: [AVAudioPCMBuffer]) -> Float {
+        var m: Float = 0
+        for buffer in buffers {
+            let frames = Int(buffer.frameLength)
+            let channels = Int(buffer.format.channelCount)
+            for ch in 0 ..< channels {
+                guard let data = buffer.floatChannelData?[ch] else { continue }
+                for i in 0 ..< frames {
+                    m = max(m, abs(data[i]))
+                }
+            }
+        }
+        return m
+    }
+
+    private func applyGain(_ buffers: [AVAudioPCMBuffer], gain: Float) -> [AVAudioPCMBuffer] {
+        buffers.compactMap { buffer in
+            guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: buffer.frameCapacity) else { return nil }
+            out.frameLength = buffer.frameLength
+            let frames = Int(buffer.frameLength)
+            let channels = Int(format.channelCount)
+            for ch in 0 ..< channels {
+                guard let src = buffer.floatChannelData?[ch],
+                      let dst = out.floatChannelData?[ch] else { continue }
+                for i in 0 ..< frames {
+                    dst[i] = (src[i] * gain).clamped(to: -1.0 ... 1.0)
+                }
+            }
+            return out
+        }
     }
 
     private func expandSamples(_ source: [AVAudioPCMBuffer], variantsPerSample: Int) -> [AVAudioPCMBuffer] {
