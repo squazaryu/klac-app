@@ -113,6 +113,13 @@ tccutil reset ListenEvent com.tumowuh.klac
 - Добавлена расширенная диагностика запуска захвата клавиатуры.
 - Улучшен `Stack-режим`: контраст между `0%` и `100%` стал заметно выше.
 
+## Что нового в 1.6.0
+- Добавлен профиль `Kalih Box White` в список встроенных sound packs.
+- Добавлен режим `Авто-нормализация (inverse-кривая)` с целевым уровнем `@100%`.
+- Добавлен ручной редактор кривой уровней с draggable-точками (`L/M/H`) вместо 6 слайдеров.
+- Улучшена стабильность уровня в strict-режиме: отключены бустеры темпа/стака и уменьшен jitter.
+- Исправлены хвосты задержки звука: очередь воспроизведения теперь принудительно срезается при переполнении.
+
 ## Что нового в 1.5.2
 - Обновлен главный popover: более компактный liquid-glass интерфейс.
 - Унифицирован стиль кнопок (`Проверить`, `Восстановить`, `?`, `шестеренка`, `power`).
@@ -133,7 +140,7 @@ SIGN_IDENTITY="Apple Development: YOUR_NAME (TEAMID)" ./scripts/build_app.sh --i
 ## Релизы в GitHub
 ```bash
 cd "/path/to/project"
-./scripts/release.sh v1.0.0
+./scripts/release.sh v1.6.0
 ```
 
 Что делает `release.sh`:
@@ -145,9 +152,9 @@ cd "/path/to/project"
 
 Полезные флаги:
 ```bash
-./scripts/release.sh v1.0.1 --dry-run
-./scripts/release.sh v1.0.1 --notes-file RELEASE_NOTES.md
-./scripts/release.sh v1.0.1 --skip-push
+./scripts/release.sh v1.6.0 --dry-run
+./scripts/release.sh v1.6.0 --notes-file RELEASE_NOTES.md
+./scripts/release.sh v1.6.0 --skip-push
 ```
 
 ## Лицензия

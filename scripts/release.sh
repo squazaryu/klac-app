@@ -7,12 +7,12 @@ cd "$ROOT_DIR"
 usage() {
   cat <<USAGE
 Usage:
-  ./scripts/release.sh v1.0.0 [--notes-file path] [--dry-run] [--skip-push]
+  ./scripts/release.sh v1.6.0 [--notes-file path] [--dry-run] [--skip-push]
 
 Examples:
-  ./scripts/release.sh v1.0.0
-  ./scripts/release.sh v1.0.1 --notes-file RELEASE_NOTES.md
-  ./scripts/release.sh v1.0.2 --dry-run
+  ./scripts/release.sh v1.6.0
+  ./scripts/release.sh v1.6.0 --notes-file RELEASE_NOTES.md
+  ./scripts/release.sh v1.6.0 --dry-run
 USAGE
 }
 

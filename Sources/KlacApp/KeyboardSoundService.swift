@@ -106,6 +106,56 @@ final class KeyboardSoundService: ObservableObject {
             updateDynamicCompensation()
         }
     }
+    @Published var levelMacLow: Double = 0.30 {
+        didSet {
+            defaults.set(levelMacLow.clamped(to: 0.05 ... 0.90), forKey: Keys.levelMacLow)
+            updateDynamicCompensation()
+        }
+    }
+    @Published var levelKbdLow: Double = 1.60 {
+        didSet {
+            defaults.set(levelKbdLow.clamped(to: 0.20 ... 4.00), forKey: Keys.levelKbdLow)
+            updateDynamicCompensation()
+        }
+    }
+    @Published var levelMacMid: Double = 0.60 {
+        didSet {
+            defaults.set(levelMacMid.clamped(to: 0.05 ... 0.95), forKey: Keys.levelMacMid)
+            updateDynamicCompensation()
+        }
+    }
+    @Published var levelKbdMid: Double = 1.00 {
+        didSet {
+            defaults.set(levelKbdMid.clamped(to: 0.20 ... 4.00), forKey: Keys.levelKbdMid)
+            updateDynamicCompensation()
+        }
+    }
+    @Published var levelMacHigh: Double = 1.00 {
+        didSet {
+            defaults.set(levelMacHigh.clamped(to: 0.10 ... 1.00), forKey: Keys.levelMacHigh)
+            updateDynamicCompensation()
+        }
+    }
+    @Published var levelKbdHigh: Double = 0.45 {
+        didSet {
+            defaults.set(levelKbdHigh.clamped(to: 0.20 ... 4.00), forKey: Keys.levelKbdHigh)
+            updateDynamicCompensation()
+        }
+    }
+    @Published var strictVolumeNormalizationEnabled = true {
+        didSet {
+            defaults.set(strictVolumeNormalizationEnabled, forKey: Keys.strictVolumeNormalizationEnabled)
+            soundEngine.strictLevelingEnabled = strictVolumeNormalizationEnabled
+            updateDynamicCompensation()
+            updateTypingAdaptation()
+        }
+    }
+    @Published var autoNormalizeTargetAt100: Double = 0.45 {
+        didSet {
+            defaults.set(autoNormalizeTargetAt100.clamped(to: 0.20 ... 1.20), forKey: Keys.autoNormalizeTargetAt100)
+            updateDynamicCompensation()
+        }
+    }
     @Published var typingAdaptiveEnabled = false {
         didSet {
             defaults.set(typingAdaptiveEnabled, forKey: Keys.typingAdaptiveEnabled)
@@ -141,6 +191,8 @@ final class KeyboardSoundService: ObservableObject {
     @Published var typingWPM: Double = 0
     @Published var liveDynamicGain: Double = 1.0
     @Published var liveTypingGain: Double = 1.0
+    @Published var detectedSystemVolumePercent: Double = 100.0
+    @Published var detectedSystemVolumeAvailable = false
     @Published var abFeature: ABFeature = .core
     @Published var isABPlaying = false
     @Published var currentOutputDeviceName = "Системное устройство"
@@ -162,6 +214,7 @@ final class KeyboardSoundService: ObservableObject {
     private var systemVolumeTimer: Timer?
     private var systemMonitorInterval: TimeInterval = 0
     private var lastSystemVolume: Double = 1.0
+    private var lastSystemVolumeAmplitude: Double = 1.0
     private var lastOutputDeviceID: AudioObjectID = 0
     private var outputDeviceBoosts: [String: Double] = [:]
     private var currentOutputDeviceUID = ""
@@ -181,6 +234,14 @@ final class KeyboardSoundService: ObservableObject {
         static let launchAtLogin = "settings.launchAtLogin"
         static let dynamicCompensationEnabled = "settings.dynamicCompensationEnabled"
         static let compensationStrength = "settings.compensationStrength"
+        static let levelMacLow = "settings.levelMacLow"
+        static let levelKbdLow = "settings.levelKbdLow"
+        static let levelMacMid = "settings.levelMacMid"
+        static let levelKbdMid = "settings.levelKbdMid"
+        static let levelMacHigh = "settings.levelMacHigh"
+        static let levelKbdHigh = "settings.levelKbdHigh"
+        static let strictVolumeNormalizationEnabled = "settings.strictVolumeNormalizationEnabled"
+        static let autoNormalizeTargetAt100 = "settings.autoNormalizeTargetAt100"
         static let typingAdaptiveEnabled = "settings.typingAdaptiveEnabled"
         static let stackModeEnabled = "settings.stackModeEnabled"
         static let stackDensity = "settings.stackDensity"
@@ -225,6 +286,30 @@ final class KeyboardSoundService: ObservableObject {
         if defaults.object(forKey: Keys.compensationStrength) != nil {
             compensationStrength = defaults.double(forKey: Keys.compensationStrength)
         }
+        if defaults.object(forKey: Keys.levelMacLow) != nil {
+            levelMacLow = defaults.double(forKey: Keys.levelMacLow).clamped(to: 0.05 ... 0.90)
+        }
+        if defaults.object(forKey: Keys.levelKbdLow) != nil {
+            levelKbdLow = defaults.double(forKey: Keys.levelKbdLow).clamped(to: 0.20 ... 4.00)
+        }
+        if defaults.object(forKey: Keys.levelMacMid) != nil {
+            levelMacMid = defaults.double(forKey: Keys.levelMacMid).clamped(to: 0.05 ... 0.95)
+        }
+        if defaults.object(forKey: Keys.levelKbdMid) != nil {
+            levelKbdMid = defaults.double(forKey: Keys.levelKbdMid).clamped(to: 0.20 ... 4.00)
+        }
+        if defaults.object(forKey: Keys.levelMacHigh) != nil {
+            levelMacHigh = defaults.double(forKey: Keys.levelMacHigh).clamped(to: 0.10 ... 1.00)
+        }
+        if defaults.object(forKey: Keys.levelKbdHigh) != nil {
+            levelKbdHigh = defaults.double(forKey: Keys.levelKbdHigh).clamped(to: 0.20 ... 4.00)
+        }
+        if defaults.object(forKey: Keys.strictVolumeNormalizationEnabled) != nil {
+            strictVolumeNormalizationEnabled = defaults.bool(forKey: Keys.strictVolumeNormalizationEnabled)
+        }
+        if defaults.object(forKey: Keys.autoNormalizeTargetAt100) != nil {
+            autoNormalizeTargetAt100 = defaults.double(forKey: Keys.autoNormalizeTargetAt100).clamped(to: 0.20 ... 1.20)
+        }
         if defaults.object(forKey: Keys.typingAdaptiveEnabled) != nil {
             typingAdaptiveEnabled = defaults.bool(forKey: Keys.typingAdaptiveEnabled)
         }
@@ -258,6 +343,7 @@ final class KeyboardSoundService: ObservableObject {
         soundEngine.limiterDrive = Float(limiterDrive)
         soundEngine.stackModeEnabled = stackModeEnabled
         soundEngine.stackDensity = Float(stackDensity)
+        soundEngine.strictLevelingEnabled = strictVolumeNormalizationEnabled
         soundEngine.setProfile(selectedProfile)
         updateSystemVolumeMonitoringState()
         updateTypingDecayMonitoringState()
@@ -670,7 +756,7 @@ final class KeyboardSoundService: ObservableObject {
 
     private func updateSystemVolumeMonitoringState() {
         // Keep a lightweight monitor always to detect output-device changes.
-        let targetInterval: TimeInterval = dynamicCompensationEnabled ? 0.35 : 1.2
+        let targetInterval: TimeInterval = (dynamicCompensationEnabled || strictVolumeNormalizationEnabled) ? 0.25 : 1.2
         if systemVolumeTimer == nil || abs(systemMonitorInterval - targetInterval) > 0.001 {
             startSystemVolumeMonitoring(interval: targetInterval)
         }
@@ -679,15 +765,24 @@ final class KeyboardSoundService: ObservableObject {
     private func pollSystemVolume() {
         Task.detached(priority: .background) { [weak self] in
             guard let self else { return }
-            let vol = Self.readSystemOutputVolume() ?? 100.0
-            let normalized = (vol / 100.0).clamped(to: 0.0 ... 1.0)
+            let volumeState = Self.readSystemOutputVolumeState()
             let deviceID = Self.readDefaultOutputDeviceID() ?? 0
             let deviceUID = deviceID != 0 ? (Self.readOutputDeviceUID(deviceID) ?? "") : ""
             let deviceName = deviceID != 0 ? (Self.readOutputDeviceName(deviceID) ?? "Системное устройство") : "Системное устройство"
             await MainActor.run {
-                let volumeChanged = abs(self.lastSystemVolume - normalized) > 0.005
+                self.detectedSystemVolumeAvailable = volumeState.scalar != nil
+                if let scalar = volumeState.scalar {
+                    self.detectedSystemVolumePercent = scalar * 100.0
+                }
+                let nextVolume = volumeState.scalar ?? self.lastSystemVolume
+                let nextAmplitude = volumeState.amplitude ?? self.lastSystemVolumeAmplitude
+                let volumeChanged = abs(self.lastSystemVolume - nextVolume) > 0.005
+                let amplitudeChanged = abs(self.lastSystemVolumeAmplitude - nextAmplitude) > 0.01
                 if volumeChanged {
-                    self.lastSystemVolume = normalized
+                    self.lastSystemVolume = nextVolume
+                }
+                if amplitudeChanged {
+                    self.lastSystemVolumeAmplitude = nextAmplitude
                 }
                 if deviceID != self.lastOutputDeviceID || deviceUID != self.currentOutputDeviceUID {
                     self.lastOutputDeviceID = deviceID
@@ -696,28 +791,101 @@ final class KeyboardSoundService: ObservableObject {
                     self.currentOutputDeviceBoost = self.outputDeviceBoosts[deviceUID] ?? 1.0
                     self.soundEngine.handleOutputDeviceChanged()
                 }
-                if volumeChanged || self.dynamicCompensationEnabled {
+                if volumeChanged || amplitudeChanged || self.dynamicCompensationEnabled || self.strictVolumeNormalizationEnabled {
                     self.updateDynamicCompensation()
+                    if self.strictVolumeNormalizationEnabled, volumeChanged || amplitudeChanged {
+                        NSLog(
+                            "Strict normalization update: scalar=%.3f amplitude=%.4f gain=%.3f target@100=%.3f",
+                            self.lastSystemVolume,
+                            self.lastSystemVolumeAmplitude,
+                            self.liveDynamicGain,
+                            self.autoNormalizeTargetAt100
+                        )
+                    }
                 }
             }
         }
     }
 
     private func updateDynamicCompensation() {
-        guard dynamicCompensationEnabled else {
-            soundEngine.dynamicCompensationGain = 1.0
-            liveDynamicGain = 1.0
-            return
+        var gain: Double
+        if strictVolumeNormalizationEnabled {
+            gain = Self.autoInverseGain(
+                systemVolumeScalar: lastSystemVolume,
+                targetAt100: autoNormalizeTargetAt100
+            )
+        } else {
+            gain = Self.curveGain(
+                systemVolume: lastSystemVolume,
+                macLow: levelMacLow,
+                kbdLow: levelKbdLow,
+                macMid: levelMacMid,
+                kbdMid: levelKbdMid,
+                macHigh: levelMacHigh,
+                kbdHigh: levelKbdHigh
+            )
         }
-        // Stronger curve so slider movement is audible in normal usage too.
-        let lowVolumeFactor = max(0.0, 1.0 - lastSystemVolume)
-        let gain = (1.0 + lowVolumeFactor * (0.4 + compensationStrength * 2.6)) * currentOutputDeviceBoost
-        let clamped = Float(gain).clamped(to: 1.0 ... 4.0)
+        gain *= currentOutputDeviceBoost
+
+        if dynamicCompensationEnabled && !strictVolumeNormalizationEnabled {
+            let lowVolumeFactor = max(0.0, 1.0 - lastSystemVolume)
+            gain *= 1.0 + lowVolumeFactor * (0.18 + compensationStrength * 0.95)
+        }
+
+        let clamped = Float(gain).clamped(to: 0.20 ... 6.0)
         soundEngine.dynamicCompensationGain = clamped
         let next = Double(clamped)
         if abs(liveDynamicGain - next) > 0.005 {
             liveDynamicGain = next
         }
+    }
+
+    func autoInverseGainPreview(systemVolumePercent: Double) -> Double {
+        let normalized = (systemVolumePercent / 100.0).clamped(to: 0.0 ... 1.0)
+        return Self.autoInverseGain(
+            systemVolumeScalar: normalized,
+            targetAt100: autoNormalizeTargetAt100
+        )
+    }
+
+    nonisolated private static func autoInverseGain(systemVolumeScalar: Double, targetAt100: Double) -> Double {
+        // macOS volume slider uses an audio-taper curve; compensate in the same domain.
+        let scalar = systemVolumeScalar.clamped(to: 0.05 ... 1.0)
+        let effective = pow(scalar, 2.2).clamped(to: 0.003 ... 1.0)
+        let target = targetAt100.clamped(to: 0.20 ... 1.20)
+        return (target / effective).clamped(to: 0.20 ... 12.0)
+    }
+
+    nonisolated private static func curveGain(
+        systemVolume: Double,
+        macLow: Double,
+        kbdLow: Double,
+        macMid: Double,
+        kbdMid: Double,
+        macHigh: Double,
+        kbdHigh: Double
+    ) -> Double {
+        let v = systemVolume.clamped(to: 0.0 ... 1.0)
+        let points: [(x: Double, y: Double)] = [
+            (macLow.clamped(to: 0.05 ... 0.90), kbdLow.clamped(to: 0.20 ... 4.00)),
+            (macMid.clamped(to: 0.05 ... 0.95), kbdMid.clamped(to: 0.20 ... 4.00)),
+            (macHigh.clamped(to: 0.10 ... 1.00), kbdHigh.clamped(to: 0.20 ... 4.00))
+        ].sorted { $0.x < $1.x }
+
+        let p0 = points[0]
+        let p1 = points[1]
+        let p2 = points[2]
+
+        if v <= p0.x { return p0.y }
+        if v <= p1.x {
+            let t = (v - p0.x) / max(0.0001, p1.x - p0.x)
+            return p0.y + (p1.y - p0.y) * t
+        }
+        if v <= p2.x {
+            let t = (v - p1.x) / max(0.0001, p2.x - p1.x)
+            return p1.y + (p2.y - p1.y) * t
+        }
+        return p2.y
     }
 
     private func trackTypingHit() {
@@ -769,6 +937,11 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func updateTypingAdaptation() {
+        if strictVolumeNormalizationEnabled {
+            soundEngine.typingSpeedGain = 1.0
+            liveTypingGain = 1.0
+            return
+        }
         guard typingAdaptiveEnabled else {
             soundEngine.typingSpeedGain = 1.0
             liveTypingGain = 1.0
@@ -817,70 +990,119 @@ final class KeyboardSoundService: ObservableObject {
         }
     }
 
-    nonisolated private static func readSystemOutputVolume() -> Double? {
-        var deviceID = AudioObjectID(0)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        var defaultDeviceAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        let defaultDeviceStatus = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &defaultDeviceAddress,
-            0,
-            nil,
-            &size,
-            &deviceID
-        )
-        guard defaultDeviceStatus == noErr, deviceID != 0 else { return nil }
+    nonisolated private static func readSystemOutputVolumeState() -> (scalar: Double?, amplitude: Double?) {
+        guard let deviceID = readDefaultOutputDeviceID() else { return (nil, nil) }
+        let scalar = readDeviceVolumeScalar(deviceID)
+        let amplitude = readDeviceVolumeAmplitude(deviceID, scalarHint: scalar)
+        return (scalar: scalar, amplitude: amplitude)
+    }
 
-        // Try virtual master first.
-        var volume = Float32(0)
-        size = UInt32(MemoryLayout<Float32>.size)
-        var volumeAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyVolumeScalar,
-            mScope: kAudioDevicePropertyScopeOutput,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        let masterStatus = AudioObjectGetPropertyData(
-            deviceID,
-            &volumeAddress,
-            0,
-            nil,
-            &size,
-            &volume
-        )
-        if masterStatus == noErr {
-            return Double(volume * 100)
-        }
-
-        // Fallback to left/right average for devices without master control.
-        let channels: [UInt32] = [1, 2]
-        var values: [Double] = []
-        for channel in channels {
-            volumeAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyVolumeScalar,
-                mScope: kAudioDevicePropertyScopeOutput,
-                mElement: channel
+    nonisolated private static func readDeviceVolumeScalar(_ deviceID: AudioObjectID) -> Double? {
+        func readScalar(selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope, element: AudioObjectPropertyElement) -> Double? {
+            var address = AudioObjectPropertyAddress(
+                mSelector: selector,
+                mScope: scope,
+                mElement: element
             )
-            var channelVolume = Float32(0)
-            size = UInt32(MemoryLayout<Float32>.size)
-            let channelStatus = AudioObjectGetPropertyData(
+            guard AudioObjectHasProperty(deviceID, &address) else { return nil }
+            var volume = Float32(0)
+            var size = UInt32(MemoryLayout<Float32>.size)
+            let status = AudioObjectGetPropertyData(
                 deviceID,
-                &volumeAddress,
+                &address,
                 0,
                 nil,
                 &size,
-                &channelVolume
+                &volume
             )
-            if channelStatus == noErr {
-                values.append(Double(channelVolume))
+            guard status == noErr else { return nil }
+            return Double(volume).clamped(to: 0.0 ... 1.0)
+        }
+
+        let attempts: [(AudioObjectPropertySelector, AudioObjectPropertyScope, AudioObjectPropertyElement)] = [
+            (kAudioHardwareServiceDeviceProperty_VirtualMainVolume, kAudioDevicePropertyScopeOutput, kAudioObjectPropertyElementMain),
+            (kAudioHardwareServiceDeviceProperty_VirtualMainVolume, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain),
+            (kAudioDevicePropertyVolumeScalar, kAudioDevicePropertyScopeOutput, kAudioObjectPropertyElementMain),
+            (kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain)
+        ]
+        for (selector, scope, element) in attempts {
+            if let value = readScalar(selector: selector, scope: scope, element: element) {
+                return value
+            }
+        }
+
+        // Some devices expose per-channel volume only.
+        let channels: [UInt32] = [1, 2]
+        var values: [Double] = []
+        for channel in channels {
+            if let value = readScalar(
+                selector: kAudioDevicePropertyVolumeScalar,
+                scope: kAudioDevicePropertyScopeOutput,
+                element: channel
+            ) {
+                values.append(value)
+            } else if let value = readScalar(
+                selector: kAudioDevicePropertyVolumeScalar,
+                scope: kAudioObjectPropertyScopeGlobal,
+                element: channel
+            ) {
+                values.append(value)
             }
         }
         guard !values.isEmpty else { return nil }
-        let avg = values.reduce(0, +) / Double(values.count)
-        return avg * 100
+        return values.reduce(0, +) / Double(values.count)
+    }
+
+    nonisolated private static func readDeviceVolumeAmplitude(_ deviceID: AudioObjectID, scalarHint: Double?) -> Double? {
+        func readDecibels(scope: AudioObjectPropertyScope, element: AudioObjectPropertyElement) -> Double? {
+            var address = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyVolumeDecibels,
+                mScope: scope,
+                mElement: element
+            )
+            guard AudioObjectHasProperty(deviceID, &address) else { return nil }
+            var dbValue = Float32(0)
+            var size = UInt32(MemoryLayout<Float32>.size)
+            let status = AudioObjectGetPropertyData(
+                deviceID,
+                &address,
+                0,
+                nil,
+                &size,
+                &dbValue
+            )
+            guard status == noErr, dbValue.isFinite else { return nil }
+            return Double(dbValue)
+        }
+
+        let dbAttempts: [(AudioObjectPropertyScope, AudioObjectPropertyElement)] = [
+            (kAudioDevicePropertyScopeOutput, kAudioObjectPropertyElementMain),
+            (kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain),
+            (kAudioDevicePropertyScopeOutput, 1),
+            (kAudioDevicePropertyScopeOutput, 2)
+        ]
+        var dbValues: [Double] = []
+        for (scope, element) in dbAttempts {
+            if let db = readDecibels(scope: scope, element: element) {
+                dbValues.append(db)
+            }
+        }
+        if !dbValues.isEmpty {
+            let avgDB = (dbValues.reduce(0, +) / Double(dbValues.count)).clamped(to: -96.0 ... 12.0)
+            return pow(10.0, avgDB / 20.0).clamped(to: 0.0005 ... 1.4)
+        }
+
+        // Fallback: scalar is usually an "audio taper", not linear amplitude.
+        if let scalarHint {
+            return estimatedAmplitude(fromScalar: scalarHint)
+        }
+        return nil
+    }
+
+    nonisolated private static func estimatedAmplitude(fromScalar scalar: Double) -> Double {
+        let s = scalar.clamped(to: 0.0 ... 1.0)
+        // Common macOS output controls follow an audio-taper curve.
+        return pow(s, 2.2).clamped(to: 0.0005 ... 1.0)
     }
 
     nonisolated private static func readDefaultOutputDeviceID() -> AudioObjectID? {
@@ -1130,6 +1352,7 @@ final class GlobalKeyEventTap {
 enum SoundProfile: String, CaseIterable, Identifiable {
     case g915Tactile
     case customPack
+    case kalihBoxWhite
     case holyPanda
     case gateronBlackInk
     case mxBrown
@@ -1143,6 +1366,7 @@ enum SoundProfile: String, CaseIterable, Identifiable {
         switch self {
         case .g915Tactile: return "G915 Tactile"
         case .customPack: return "Custom Pack"
+        case .kalihBoxWhite: return "Kalih Box White"
         case .holyPanda: return "Holy Panda"
         case .gateronBlackInk: return "Gateron Black Ink"
         case .mxBrown: return "MX Brown"
@@ -1165,6 +1389,7 @@ final class ClickSoundEngine {
     var spaceLevel: Float = 1.1
     var dynamicCompensationGain: Float = 1.0
     var typingSpeedGain: Float = 1.0
+    var strictLevelingEnabled: Bool = false
     var stackModeEnabled: Bool = false
     var stackDensity: Float = 0.55
     var limiterEnabled: Bool = true
@@ -1201,6 +1426,8 @@ final class ClickSoundEngine {
     }
     private var lastSampleIndexByGroup: [SampleGroup: Int] = [:]
     private var lastOutputDeviceReinit: CFAbsoluteTime = 0
+    private let scheduleLock = NSLock()
+    private var estimatedPlaybackEndTime: CFAbsoluteTime = 0
 
     init() {
         rebuildAudioGraph()
@@ -1268,6 +1495,28 @@ final class ClickSoundEngine {
                 enterUp: ["Sounds/g915/g915-enter-release-1.wav"],
                 backspaceDown: ["Sounds/g915/g915-key-press-2.wav"],
                 backspaceUp: ["Sounds/g915/g915-key-release-2.wav"]
+            )
+        case .kalihBoxWhite:
+            bank = loadBank(
+                keyDown: [
+                    "Sounds/kalihboxwhite/kalihboxwhite-press_key1.mp3",
+                    "Sounds/kalihboxwhite/kalihboxwhite-press_key2.mp3",
+                    "Sounds/kalihboxwhite/kalihboxwhite-press_key3.mp3",
+                    "Sounds/kalihboxwhite/kalihboxwhite-press_key4.mp3",
+                    "Sounds/kalihboxwhite/kalihboxwhite-press_key5.mp3",
+                    "Sounds/kalihboxwhite/kalihboxwhite-press_key6.mp3",
+                    "Sounds/kalihboxwhite/kalihboxwhite-press_key7.mp3",
+                    "Sounds/kalihboxwhite/kalihboxwhite-press_key8.mp3",
+                    "Sounds/kalihboxwhite/kalihboxwhite-press_key9.mp3",
+                    "Sounds/kalihboxwhite/kalihboxwhite-press_key10.mp3"
+                ],
+                keyUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_key.mp3"],
+                spaceDown: ["Sounds/kalihboxwhite/kalihboxwhite-press_space.mp3"],
+                spaceUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_space.mp3"],
+                enterDown: ["Sounds/kalihboxwhite/kalihboxwhite-press_enter.mp3"],
+                enterUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_enter.mp3"],
+                backspaceDown: ["Sounds/kalihboxwhite/kalihboxwhite-press_back.mp3"],
+                backspaceUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_back.mp3"]
             )
         case .holyPanda:
             bank = loadBank(
@@ -1390,7 +1639,7 @@ final class ClickSoundEngine {
     func startIfNeeded() {
         if !engine.isRunning {
             do {
-                engine.mainMixerNode.outputVolume = masterVolume
+                engine.mainMixerNode.outputVolume = 1.0
                 try engine.start()
                 player.play()
             } catch {
@@ -1402,6 +1651,9 @@ final class ClickSoundEngine {
     func stop() {
         player.stop()
         engine.stop()
+        scheduleLock.lock()
+        estimatedPlaybackEndTime = 0
+        scheduleLock.unlock()
     }
 
     func handleOutputDeviceChanged() {
@@ -1423,9 +1675,12 @@ final class ClickSoundEngine {
         let newPlayer = AVAudioPlayerNode()
         newEngine.attach(newPlayer)
         newEngine.connect(newPlayer, to: newEngine.mainMixerNode, format: format)
-        newEngine.mainMixerNode.outputVolume = masterVolume
+        newEngine.mainMixerNode.outputVolume = 1.0
         engine = newEngine
         player = newPlayer
+        scheduleLock.lock()
+        estimatedPlaybackEndTime = 0
+        scheduleLock.unlock()
     }
 
     func playDown(for keyCode: Int, autorepeat: Bool) {
@@ -1454,18 +1709,19 @@ final class ClickSoundEngine {
         }
 
         let effectiveVariation = max(0.10, variation)
-        var gainJitter = Float.random(in: -effectiveVariation ... effectiveVariation) * 0.34
+        let jitterScale: Float = strictLevelingEnabled ? 0.04 : 0.34
+        var gainJitter = Float.random(in: -effectiveVariation ... effectiveVariation) * jitterScale
         if autorepeat { gainJitter -= 0.1 }
-        var gain = (masterVolume * keyLevel * dynamicCompensationGain * typingSpeedGain + gainJitter).clamped(to: 0.03 ... 2.8)
+        var gain = (masterVolume * keyLevel * dynamicCompensationGain * typingSpeedGain + gainJitter).clamped(to: 0.03 ... 16.0)
         var interrupt = false
-        if stackModeEnabled {
+        if stackModeEnabled && !strictLevelingEnabled {
             let now = CFAbsoluteTimeGetCurrent()
             let dt = now - lastDownHitTime
             lastDownHitTime = now
             let density = stackDensity.clamped(to: 0.0 ... 1.0)
             let proximity = Float(max(0.0, 1.0 - dt / 0.18))
             let stackBoost = 1.0 + (density * density) * proximity * 3.2
-            gain = (gain * stackBoost).clamped(to: 0.03 ... 3.4)
+            gain = (gain * stackBoost).clamped(to: 0.03 ... 18.0)
             interrupt = density > 0.25
         }
         schedule(pickSample(from: pool, group: group), gain: gain, interruptIfNeeded: interrupt)
@@ -1473,7 +1729,7 @@ final class ClickSoundEngine {
 
     func playUp(for keyCode: Int) {
         guard engine.isRunning else { return }
-        if stackModeEnabled {
+        if stackModeEnabled && !strictLevelingEnabled {
             let density = stackDensity.clamped(to: 0.0 ... 1.0)
             if density >= 0.65 {
                 return
@@ -1501,18 +1757,18 @@ final class ClickSoundEngine {
             group = .keyUp
         }
         let effectiveVariation = max(0.10, variation)
-        var gain = (masterVolume * releaseLevel * dynamicCompensationGain * typingSpeedGain + Float.random(in: -effectiveVariation ... effectiveVariation) * 0.16).clamped(to: 0.02 ... 1.3)
-        if stackModeEnabled {
+        let releaseJitterScale: Float = strictLevelingEnabled ? 0.02 : 0.16
+        var gain = (masterVolume * releaseLevel * dynamicCompensationGain * typingSpeedGain + Float.random(in: -effectiveVariation ... effectiveVariation) * releaseJitterScale).clamped(to: 0.02 ... 8.0)
+        if stackModeEnabled && !strictLevelingEnabled {
             let tailCut = (1.0 - stackDensity * 0.9).clamped(to: 0.08 ... 1.0)
             gain = (gain * tailCut).clamped(to: 0.01 ... 1.3)
         }
-        let interrupt = stackModeEnabled && stackDensity > 0.25
+        let interrupt = !strictLevelingEnabled && stackModeEnabled && stackDensity > 0.25
         schedule(pickSample(from: pool, group: group), gain: gain, interruptIfNeeded: interrupt)
     }
 
     private func schedule(_ buffer: AVAudioPCMBuffer?, gain: Float, interruptIfNeeded: Bool) {
         guard let buffer else { return }
-        engine.mainMixerNode.outputVolume = masterVolume
         // Duplicate buffer with per-hit gain for low-latency playback without re-synthesis.
         guard let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: buffer.frameCapacity) else { return }
         copy.frameLength = buffer.frameLength
@@ -1544,8 +1800,30 @@ final class ClickSoundEngine {
             }
         }
 
-        // Only allow interruption for release tails; keep key-down attacks stable.
-        let options: AVAudioPlayerNodeBufferOptions = interruptIfNeeded ? [.interrupts] : []
+        let now = CFAbsoluteTimeGetCurrent()
+        let bufferSeconds = Double(copy.frameLength) / format.sampleRate
+        var queueOverflowInterrupt = false
+        scheduleLock.lock()
+        if !player.isPlaying || estimatedPlaybackEndTime < now - 0.45 {
+            estimatedPlaybackEndTime = now
+        }
+        let queuedAhead = max(0, estimatedPlaybackEndTime - now)
+        let queueLimit = strictLevelingEnabled ? 0.05 : 0.12
+        if queuedAhead > queueLimit {
+            queueOverflowInterrupt = true
+            estimatedPlaybackEndTime = now + bufferSeconds
+        } else {
+            let start = max(now, estimatedPlaybackEndTime)
+            estimatedPlaybackEndTime = start + bufferSeconds
+        }
+        scheduleLock.unlock()
+
+        // Interrupt when queue starts to lag behind live typing.
+        let shouldInterrupt = interruptIfNeeded || queueOverflowInterrupt
+        if queueOverflowInterrupt {
+            NSLog("Audio queue overflow detected: forcing interrupt to keep typing in sync")
+        }
+        let options: AVAudioPlayerNodeBufferOptions = shouldInterrupt ? [.interrupts] : []
         player.scheduleBuffer(copy, at: nil, options: options, completionHandler: nil)
         if !player.isPlaying {
             player.play()
