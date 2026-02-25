@@ -6,7 +6,7 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var systemColorScheme
     @State private var showAdvancedPopover = false
     @State private var showAccessHintPopover = false
-    private let panelWidth: CGFloat = 282
+    private let panelWidth: CGFloat = 266
 
     var body: some View {
         ZStack {
@@ -30,7 +30,7 @@ struct ContentView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 header
                 compactMainCard
                 quickActions
@@ -93,13 +93,22 @@ struct ContentView: View {
     }
 
     private var appVersionCaption: String {
-        let releaseFallbackVersion = "1.6.0"
+        let releaseFallbackVersion = "1.7.0"
         let short = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let tag = (Bundle.main.object(forInfoDictionaryKey: "KlacBuildTag") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let version = (short?.isEmpty == false) ? short! : releaseFallbackVersion
-        let buildPart = (build?.isEmpty == false) ? "b\(build!)" : "bdev"
+        let buildPart: String
+        if build?.isEmpty == false, tag?.isEmpty == false {
+            buildPart = "b\(build!)-\(tag!)"
+        } else if build?.isEmpty == false {
+            buildPart = "b\(build!)"
+        } else {
+            buildPart = "bdev"
+        }
         return "v\(version) (\(buildPart))"
     }
 
@@ -139,7 +148,7 @@ struct ContentView: View {
     }
 
     private var compactMainCard: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline) {
                 Text(captureStatusTitle)
                     .font(.system(size: 20, weight: .semibold, design: .rounded))
@@ -167,7 +176,7 @@ struct ContentView: View {
                 }
             }
 
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 statusPill(title: "AX", enabled: service.accessibilityGranted)
                 statusPill(title: "Input", enabled: service.inputMonitoringGranted)
                 statusPill(title: "Tap", enabled: service.capturingKeyboard)
@@ -184,22 +193,22 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(7)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(6)
+        .background(.thinMaterial.opacity(isDarkTheme ? 0.55 : 0.72), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(.white.opacity(isDarkTheme ? 0.14 : 0.28), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.white.opacity(isDarkTheme ? 0.22 : 0.30), lineWidth: 1)
         }
     }
 
     private var quickActions: some View {
-        HStack(alignment: .bottom, spacing: 6) {
+        HStack(alignment: .bottom, spacing: 5) {
             Button("Проверить") { service.refreshAccessibilityStatus(promptIfNeeded: true) }
                 .buttonStyle(MinimalLiquidActionButtonStyle())
-                .frame(width: 106)
+                .frame(width: 98)
             Button("Восст.") { service.runAccessRecoveryWizard() }
                 .buttonStyle(MinimalLiquidActionButtonStyle())
-                .frame(width: 96)
+                .frame(width: 84)
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 2) {
                 Button {
@@ -242,18 +251,18 @@ private struct GlassCard<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(.primary)
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(10)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.18), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.22), lineWidth: 1)
         }
     }
 }
@@ -276,7 +285,7 @@ private struct AdvancedSettingsView: View {
                         sliderRow(title: "Вариативность", value: $service.variation)
                         sliderRow(title: "Нажатие", value: $service.pressLevel, range: 0.2 ... 1.6)
                         sliderRow(title: "Отпускание", value: $service.releaseLevel, range: 0.1 ... 1.4)
-                        sliderRow(title: "Space/Enter", value: $service.spaceLevel, range: 0.5 ... 1.8)
+                        sliderRow(title: "Space/Enter", value: $service.spaceLevel, range: 0.2 ... 1.8)
                         Toggle("Звук отпускания клавиши", isOn: $service.playKeyUp)
                             .tint(.cyan)
                             .foregroundStyle(.primary)
@@ -321,18 +330,6 @@ private struct AdvancedSettingsView: View {
                         Text("Проигрывает два теста подряд: сначала OFF, затем ON.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                        HStack {
-                            Button("Импорт Sound Pack") { service.importSoundPack() }
-                                .buttonStyle(PrimaryGlassButtonStyle())
-                            Text("Профиль: Custom Pack")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                        if let status = service.soundPackStatus {
-                            Text(status)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
                     }
                 }
 
@@ -670,15 +667,15 @@ private struct PrimaryGlassButtonStyle: ButtonStyle {
             .lineLimit(1)
             .minimumScaleFactor(0.85)
             .foregroundStyle(.primary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(configuration.isPressed ? Color.primary.opacity(0.18) : Color.primary.opacity(0.12))
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(configuration.isPressed ? Color.primary.opacity(0.20) : Color.primary.opacity(0.14))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(configuration.isPressed ? 0.30 : 0.38), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(configuration.isPressed ? 0.36 : 0.42), lineWidth: 1)
             )
     }
 }
@@ -701,12 +698,12 @@ private struct MinimalLiquidActionButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(size: 13, weight: .medium, design: .rounded))
             .foregroundStyle(foreground)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
             .background(Capsule().fill(fill))
             .overlay {
                 Capsule()
-                    .strokeBorder(stroke, lineWidth: 1.0)
+                    .strokeBorder(stroke.opacity(1.05), lineWidth: 1.1)
             }
             .shadow(color: isDark ? .black.opacity(0.26) : .clear, radius: isDark ? 2 : 0, x: 0, y: 1)
             .scaleEffect(configuration.isPressed ? 0.985 : 1.0)
