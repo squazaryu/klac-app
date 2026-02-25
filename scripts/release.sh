@@ -7,12 +7,13 @@ cd "$ROOT_DIR"
 usage() {
   cat <<USAGE
 Usage:
-  ./scripts/release.sh v1.6.0 [--notes-file path] [--dry-run] [--skip-push]
+  ./scripts/release.sh v1.7.1 [--notes-file path] [--dry-run] [--skip-push] [--zip-only]
 
 Examples:
-  ./scripts/release.sh v1.6.0
-  ./scripts/release.sh v1.6.0 --notes-file RELEASE_NOTES.md
-  ./scripts/release.sh v1.6.0 --dry-run
+  ./scripts/release.sh v1.7.1
+  ./scripts/release.sh v1.7.1 --notes-file RELEASE_NOTES.md
+  ./scripts/release.sh v1.7.1 --dry-run
+  ./scripts/release.sh v1.7.1 --zip-only
 USAGE
 }
 
@@ -25,6 +26,7 @@ VERSION=""
 NOTES_FILE=""
 DRY_RUN=0
 SKIP_PUSH=0
+ZIP_ONLY=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -40,6 +42,9 @@ while [ $# -gt 0 ]; do
       ;;
     --skip-push)
       SKIP_PUSH=1
+      ;;
+    --zip-only)
+      ZIP_ONLY=1
       ;;
     -h|--help)
       usage
@@ -87,16 +92,24 @@ fi
 VERSION_NO_V="${VERSION#v}"
 BUILD_NUMBER="$(date +%Y%m%d%H%M)"
 ZIP_PATH="$ROOT_DIR/dist/Klac-${VERSION}.zip"
+DMG_PATH="$ROOT_DIR/dist/Klac-${VERSION}.dmg"
 APP_PATH="$ROOT_DIR/dist/Klac.app"
 BUILD_LOG="$(mktemp)"
 
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "[dry-run] Would build app for version $VERSION_NO_V (build $BUILD_NUMBER)"
   echo "[dry-run] Would package zip: $ZIP_PATH"
+  if [ "$ZIP_ONLY" -eq 0 ]; then
+    echo "[dry-run] Would package dmg: $DMG_PATH"
+  fi
   echo "[dry-run] Would create tag: $VERSION"
   if [ "$SKIP_PUSH" -eq 0 ]; then
     echo "[dry-run] Would push main and $VERSION"
-    echo "[dry-run] Would create GitHub release with asset"
+    if [ "$ZIP_ONLY" -eq 0 ]; then
+      echo "[dry-run] Would create GitHub release with zip + dmg assets"
+    else
+      echo "[dry-run] Would create GitHub release with zip asset"
+    fi
   fi
   exit 0
 fi
@@ -115,6 +128,15 @@ fi
 rm -f "$ZIP_PATH"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
 
+if [ "$ZIP_ONLY" -eq 0 ]; then
+  rm -f "$DMG_PATH"
+  DMG_STAGING="$ROOT_DIR/dist/dmg-root-${VERSION}-$(date +%Y%m%d%H%M%S)"
+  mkdir -p "$DMG_STAGING"
+  cp -R "$APP_PATH" "$DMG_STAGING/"
+  ln -s /Applications "$DMG_STAGING/Applications"
+  hdiutil create -volname "Klac" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_PATH"
+fi
+
 git tag -a "$VERSION" -m "Release $VERSION"
 
 if [ "$SKIP_PUSH" -eq 0 ]; then
@@ -122,14 +144,28 @@ if [ "$SKIP_PUSH" -eq 0 ]; then
   git push origin "$VERSION"
 
   if [ -n "$NOTES_FILE" ]; then
-    gh release create "$VERSION" "$ZIP_PATH" --title "$VERSION" --notes-file "$NOTES_FILE"
+    if [ "$ZIP_ONLY" -eq 0 ]; then
+      gh release create "$VERSION" "$ZIP_PATH" "$DMG_PATH" --title "$VERSION" --notes-file "$NOTES_FILE"
+    else
+      gh release create "$VERSION" "$ZIP_PATH" --title "$VERSION" --notes-file "$NOTES_FILE"
+    fi
   else
-    gh release create "$VERSION" "$ZIP_PATH" --title "$VERSION" --generate-notes
+    if [ "$ZIP_ONLY" -eq 0 ]; then
+      gh release create "$VERSION" "$ZIP_PATH" "$DMG_PATH" --title "$VERSION" --generate-notes
+    else
+      gh release create "$VERSION" "$ZIP_PATH" --title "$VERSION" --generate-notes
+    fi
   fi
 
   echo "Release published: $VERSION"
   echo "Asset: $ZIP_PATH"
+  if [ "$ZIP_ONLY" -eq 0 ]; then
+    echo "Asset: $DMG_PATH"
+  fi
 else
   echo "Created local tag only: $VERSION"
   echo "Asset built: $ZIP_PATH"
+  if [ "$ZIP_ONLY" -eq 0 ]; then
+    echo "Asset built: $DMG_PATH"
+  fi
 fi
