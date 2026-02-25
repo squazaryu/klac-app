@@ -102,8 +102,8 @@ cd "/path/to/project"
 
 Ручной сброс:
 ```bash
-tccutil reset Accessibility com.tumowuh.klac
-tccutil reset ListenEvent com.tumowuh.klac
+tccutil reset Accessibility com.klacapp.klac
+tccutil reset ListenEvent com.klacapp.klac
 ```
 
 ## Что нового в 1.4.0
