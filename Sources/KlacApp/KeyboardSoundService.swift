@@ -81,7 +81,7 @@ final class KeyboardSoundService: ObservableObject {
             defaults.set(spaceLevel, forKey: Keys.spaceLevel)
         }
     }
-    @Published var selectedProfile: SoundProfile = .g915Tactile {
+    @Published var selectedProfile: SoundProfile = .kalihBoxWhite {
         didSet {
             soundEngine.setProfile(selectedProfile)
             defaults.set(selectedProfile.rawValue, forKey: Keys.selectedProfile)
@@ -147,6 +147,7 @@ final class KeyboardSoundService: ObservableObject {
             defaults.set(strictVolumeNormalizationEnabled, forKey: Keys.strictVolumeNormalizationEnabled)
             soundEngine.strictLevelingEnabled = strictVolumeNormalizationEnabled
             updateDynamicCompensation()
+            updateTypingDecayMonitoringState()
             updateTypingAdaptation()
         }
     }
@@ -202,7 +203,6 @@ final class KeyboardSoundService: ObservableObject {
             updateDynamicCompensation()
         }
     }
-    @Published var soundPackStatus: String?
     @Published var appearanceMode: AppearanceMode = .system {
         didSet { defaults.set(appearanceMode.rawValue, forKey: Keys.appearanceMode) }
     }
@@ -214,7 +214,8 @@ final class KeyboardSoundService: ObservableObject {
     private var systemVolumeTimer: Timer?
     private var systemMonitorInterval: TimeInterval = 0
     private var lastSystemVolume: Double = 1.0
-    private var lastSystemVolumeAmplitude: Double = 1.0
+    private let systemMonitorQueue = DispatchQueue(label: "Klac.SystemAudioMonitor", qos: .utility)
+    private var systemPollInFlight = false
     private var lastOutputDeviceID: AudioObjectID = 0
     private var outputDeviceBoosts: [String: Double] = [:]
     private var currentOutputDeviceUID = ""
@@ -366,7 +367,9 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     func start() {
-        refreshAccessibilityStatus(promptIfNeeded: true)
+        // Avoid forcing the system consent prompt on every launch.
+        // User can trigger an explicit prompt via the "Проверить" action.
+        refreshAccessibilityStatus(promptIfNeeded: false)
         soundEngine.startIfNeeded()
         capturingKeyboard = eventTap.start()
         NSLog("Keyboard capture start result: capturingKeyboard=\(capturingKeyboard), accessibilityGranted=\(accessibilityGranted), inputMonitoringGranted=\(inputMonitoringGranted)")
@@ -685,44 +688,9 @@ final class KeyboardSoundService: ObservableObject {
             playKeyUp = snapshot.playKeyUp
             pressLevel = snapshot.pressLevel.clamped(to: 0.2 ... 1.6)
             releaseLevel = snapshot.releaseLevel.clamped(to: 0.1 ... 1.4)
-            spaceLevel = snapshot.spaceLevel.clamped(to: 0.5 ... 1.8)
+            spaceLevel = snapshot.spaceLevel.clamped(to: 0.2 ... 1.8)
         } catch {
             NSLog("Failed to import settings: \(error)")
-        }
-    }
-
-    func importSoundPack() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.folder, .zip]
-        panel.title = "Импорт Sound Pack"
-        panel.message = "Выбери папку или zip-архив со звуками."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        let destination = Self.customPackDirectory()
-        do {
-            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
-            }
-            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-
-            if url.pathExtension.lowercased() == "zip" {
-                try Self.unzipSoundPack(from: url, to: destination)
-            } else {
-                try Self.copyDirectoryContents(from: url, to: destination)
-            }
-
-            if soundEngine.installCustomPack(from: destination) {
-                selectedProfile = .customPack
-                soundPackStatus = "Sound Pack импортирован."
-            } else {
-                soundPackStatus = "Не удалось загрузить пак: проверь имена файлов."
-            }
-        } catch {
-            soundPackStatus = "Ошибка импорта: \(error.localizedDescription)"
         }
     }
 
@@ -756,52 +724,47 @@ final class KeyboardSoundService: ObservableObject {
 
     private func updateSystemVolumeMonitoringState() {
         // Keep a lightweight monitor always to detect output-device changes.
-        let targetInterval: TimeInterval = (dynamicCompensationEnabled || strictVolumeNormalizationEnabled) ? 0.25 : 1.2
+        let targetInterval: TimeInterval = (dynamicCompensationEnabled || strictVolumeNormalizationEnabled) ? 0.6 : 1.4
         if systemVolumeTimer == nil || abs(systemMonitorInterval - targetInterval) > 0.001 {
             startSystemVolumeMonitoring(interval: targetInterval)
         }
     }
 
     private func pollSystemVolume() {
-        Task.detached(priority: .background) { [weak self] in
-            guard let self else { return }
-            let volumeState = Self.readSystemOutputVolumeState()
+        if systemPollInFlight { return }
+        systemPollInFlight = true
+        systemMonitorQueue.async { [weak self] in
+            let scalar = Self.readSystemOutputVolume()
             let deviceID = Self.readDefaultOutputDeviceID() ?? 0
             let deviceUID = deviceID != 0 ? (Self.readOutputDeviceUID(deviceID) ?? "") : ""
             let deviceName = deviceID != 0 ? (Self.readOutputDeviceName(deviceID) ?? "Системное устройство") : "Системное устройство"
-            await MainActor.run {
-                self.detectedSystemVolumeAvailable = volumeState.scalar != nil
-                if let scalar = volumeState.scalar {
+
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                defer { self.systemPollInFlight = false }
+
+                self.detectedSystemVolumeAvailable = scalar != nil
+                if let scalar {
                     self.detectedSystemVolumePercent = scalar * 100.0
                 }
-                let nextVolume = volumeState.scalar ?? self.lastSystemVolume
-                let nextAmplitude = volumeState.amplitude ?? self.lastSystemVolumeAmplitude
+
+                let nextVolume = scalar ?? self.lastSystemVolume
                 let volumeChanged = abs(self.lastSystemVolume - nextVolume) > 0.005
-                let amplitudeChanged = abs(self.lastSystemVolumeAmplitude - nextAmplitude) > 0.01
                 if volumeChanged {
                     self.lastSystemVolume = nextVolume
                 }
-                if amplitudeChanged {
-                    self.lastSystemVolumeAmplitude = nextAmplitude
-                }
-                if deviceID != self.lastOutputDeviceID || deviceUID != self.currentOutputDeviceUID {
+
+                let deviceChanged = deviceID != self.lastOutputDeviceID || deviceUID != self.currentOutputDeviceUID
+                if deviceChanged {
                     self.lastOutputDeviceID = deviceID
                     self.currentOutputDeviceUID = deviceUID
                     self.currentOutputDeviceName = deviceName
                     self.currentOutputDeviceBoost = self.outputDeviceBoosts[deviceUID] ?? 1.0
                     self.soundEngine.handleOutputDeviceChanged()
                 }
-                if volumeChanged || amplitudeChanged || self.dynamicCompensationEnabled || self.strictVolumeNormalizationEnabled {
+
+                if volumeChanged || deviceChanged {
                     self.updateDynamicCompensation()
-                    if self.strictVolumeNormalizationEnabled, volumeChanged || amplitudeChanged {
-                        NSLog(
-                            "Strict normalization update: scalar=%.3f amplitude=%.4f gain=%.3f target@100=%.3f",
-                            self.lastSystemVolume,
-                            self.lastSystemVolumeAmplitude,
-                            self.liveDynamicGain,
-                            self.autoNormalizeTargetAt100
-                        )
-                    }
                 }
             }
         }
@@ -913,7 +876,7 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func updateTypingDecayMonitoringState() {
-        if typingAdaptiveEnabled {
+        if typingAdaptiveEnabled && !strictVolumeNormalizationEnabled {
             if typingDecayTimer == nil {
                 startTypingDecayMonitoring()
             }
@@ -966,35 +929,9 @@ final class KeyboardSoundService: ObservableObject {
         }
     }
 
-    private static func customPackDirectory() -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return base.appendingPathComponent("Klac/SoundPacks/Custom", isDirectory: true)
-    }
-
-    nonisolated private static func unzipSoundPack(from zipURL: URL, to destination: URL) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-        process.arguments = ["-x", "-k", zipURL.path, destination.path]
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw NSError(domain: "Klac", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: "ditto unzip failed"])
-        }
-    }
-
-    nonisolated private static func copyDirectoryContents(from source: URL, to destination: URL) throws {
-        let files = try FileManager.default.contentsOfDirectory(at: source, includingPropertiesForKeys: nil)
-        for file in files {
-            let target = destination.appendingPathComponent(file.lastPathComponent)
-            try FileManager.default.copyItem(at: file, to: target)
-        }
-    }
-
-    nonisolated private static func readSystemOutputVolumeState() -> (scalar: Double?, amplitude: Double?) {
-        guard let deviceID = readDefaultOutputDeviceID() else { return (nil, nil) }
-        let scalar = readDeviceVolumeScalar(deviceID)
-        let amplitude = readDeviceVolumeAmplitude(deviceID, scalarHint: scalar)
-        return (scalar: scalar, amplitude: amplitude)
+    nonisolated private static func readSystemOutputVolume() -> Double? {
+        guard let deviceID = readDefaultOutputDeviceID() else { return nil }
+        return readDeviceVolumeScalar(deviceID)
     }
 
     nonisolated private static func readDeviceVolumeScalar(_ deviceID: AudioObjectID) -> Double? {
@@ -1051,58 +988,6 @@ final class KeyboardSoundService: ObservableObject {
         }
         guard !values.isEmpty else { return nil }
         return values.reduce(0, +) / Double(values.count)
-    }
-
-    nonisolated private static func readDeviceVolumeAmplitude(_ deviceID: AudioObjectID, scalarHint: Double?) -> Double? {
-        func readDecibels(scope: AudioObjectPropertyScope, element: AudioObjectPropertyElement) -> Double? {
-            var address = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyVolumeDecibels,
-                mScope: scope,
-                mElement: element
-            )
-            guard AudioObjectHasProperty(deviceID, &address) else { return nil }
-            var dbValue = Float32(0)
-            var size = UInt32(MemoryLayout<Float32>.size)
-            let status = AudioObjectGetPropertyData(
-                deviceID,
-                &address,
-                0,
-                nil,
-                &size,
-                &dbValue
-            )
-            guard status == noErr, dbValue.isFinite else { return nil }
-            return Double(dbValue)
-        }
-
-        let dbAttempts: [(AudioObjectPropertyScope, AudioObjectPropertyElement)] = [
-            (kAudioDevicePropertyScopeOutput, kAudioObjectPropertyElementMain),
-            (kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain),
-            (kAudioDevicePropertyScopeOutput, 1),
-            (kAudioDevicePropertyScopeOutput, 2)
-        ]
-        var dbValues: [Double] = []
-        for (scope, element) in dbAttempts {
-            if let db = readDecibels(scope: scope, element: element) {
-                dbValues.append(db)
-            }
-        }
-        if !dbValues.isEmpty {
-            let avgDB = (dbValues.reduce(0, +) / Double(dbValues.count)).clamped(to: -96.0 ... 12.0)
-            return pow(10.0, avgDB / 20.0).clamped(to: 0.0005 ... 1.4)
-        }
-
-        // Fallback: scalar is usually an "audio taper", not linear amplitude.
-        if let scalarHint {
-            return estimatedAmplitude(fromScalar: scalarHint)
-        }
-        return nil
-    }
-
-    nonisolated private static func estimatedAmplitude(fromScalar scalar: Double) -> Double {
-        let s = scalar.clamped(to: 0.0 ... 1.0)
-        // Common macOS output controls follow an audio-taper curve.
-        return pow(s, 2.2).clamped(to: 0.0005 ... 1.0)
     }
 
     nonisolated private static func readDefaultOutputDeviceID() -> AudioObjectID? {
@@ -1350,29 +1235,23 @@ final class GlobalKeyEventTap {
 }
 
 enum SoundProfile: String, CaseIterable, Identifiable {
-    case g915Tactile
     case customPack
     case kalihBoxWhite
-    case holyPanda
-    case gateronBlackInk
-    case mxBrown
-    case mxBlack
-    case gateronRedInk
-    case alpaca
+    case mechvibesGateronBrownsRevolt
+    case mechvibesHyperXAqua
+    case mechvibesBoxJade
+    case mechvibesOperaGX
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .g915Tactile: return "G915 Tactile"
         case .customPack: return "Custom Pack"
         case .kalihBoxWhite: return "Kalih Box White"
-        case .holyPanda: return "Holy Panda"
-        case .gateronBlackInk: return "Gateron Black Ink"
-        case .mxBrown: return "MX Brown"
-        case .mxBlack: return "MX Black"
-        case .gateronRedInk: return "Gateron Red Ink"
-        case .alpaca: return "Alpaca"
+        case .mechvibesGateronBrownsRevolt: return "Mechvibes: Gateron Browns - Revolt"
+        case .mechvibesHyperXAqua: return "Mechvibes: HyperX Aqua"
+        case .mechvibesBoxJade: return "Mechvibes: Box Jade"
+        case .mechvibesOperaGX: return "Mechvibes: Opera GX"
         }
     }
 }
@@ -1435,49 +1314,6 @@ final class ClickSoundEngine {
 
     func setProfile(_ profile: SoundProfile) {
         switch profile {
-        case .g915Tactile:
-            bank = loadBank(
-                keyDown: [
-                    "Sounds/g915/g915-key-press-1.wav",
-                    "Sounds/g915/g915-key-press-2.wav",
-                    "Sounds/g915/g915-key-press-3.wav",
-                    "Sounds/g915/g915-key-press-4.wav",
-                    "Sounds/g915/g915-key-press-5.wav"
-                ],
-                keyUp: [
-                    "Sounds/g915/g915-key-release-1.wav",
-                    "Sounds/g915/g915-key-release-2.wav",
-                    "Sounds/g915/g915-key-release-3.wav",
-                    "Sounds/g915/g915-key-release-4.wav",
-                    "Sounds/g915/g915-key-release-5.wav"
-                ],
-                spaceDown: [
-                    "Sounds/g915/g915-space-press-1.wav",
-                    "Sounds/g915/g915-space-press-2.wav",
-                    "Sounds/g915/g915-space-press-3.wav"
-                ],
-                spaceUp: [
-                    "Sounds/g915/g915-space-release-1.wav",
-                    "Sounds/g915/g915-space-release-2.wav",
-                    "Sounds/g915/g915-space-release-3.wav"
-                ],
-                enterDown: [
-                    "Sounds/g915/g915-enter-press-1.wav",
-                    "Sounds/g915/g915-enter-press-2.wav"
-                ],
-                enterUp: [
-                    "Sounds/g915/g915-enter-release-1.wav",
-                    "Sounds/g915/g915-enter-release-2.wav"
-                ],
-                backspaceDown: [
-                    "Sounds/g915/g915-key-press-2.wav",
-                    "Sounds/g915/g915-key-press-4.wav"
-                ],
-                backspaceUp: [
-                    "Sounds/g915/g915-key-release-2.wav",
-                    "Sounds/g915/g915-key-release-4.wav"
-                ]
-            )
         case .customPack:
             if let root = customPackRoot, installCustomPack(from: root) {
                 return
@@ -1487,14 +1323,14 @@ final class ClickSoundEngine {
                 return
             }
             bank = loadBank(
-                keyDown: ["Sounds/g915/g915-key-press-1.wav"],
-                keyUp: ["Sounds/g915/g915-key-release-1.wav"],
-                spaceDown: ["Sounds/g915/g915-space-press-1.wav"],
-                spaceUp: ["Sounds/g915/g915-space-release-1.wav"],
-                enterDown: ["Sounds/g915/g915-enter-press-1.wav"],
-                enterUp: ["Sounds/g915/g915-enter-release-1.wav"],
-                backspaceDown: ["Sounds/g915/g915-key-press-2.wav"],
-                backspaceUp: ["Sounds/g915/g915-key-release-2.wav"]
+                keyDown: ["Sounds/kalihboxwhite/kalihboxwhite-press_key1.mp3"],
+                keyUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_key.mp3"],
+                spaceDown: ["Sounds/kalihboxwhite/kalihboxwhite-press_space.mp3"],
+                spaceUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_space.mp3"],
+                enterDown: ["Sounds/kalihboxwhite/kalihboxwhite-press_enter.mp3"],
+                enterUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_enter.mp3"],
+                backspaceDown: ["Sounds/kalihboxwhite/kalihboxwhite-press_back.mp3"],
+                backspaceUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_back.mp3"]
             )
         case .kalihBoxWhite:
             bank = loadBank(
@@ -1518,111 +1354,25 @@ final class ClickSoundEngine {
                 backspaceDown: ["Sounds/kalihboxwhite/kalihboxwhite-press_back.mp3"],
                 backspaceUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_back.mp3"]
             )
-        case .holyPanda:
-            bank = loadBank(
-                keyDown: [
-                    "Sounds/holypanda/holypanda-press_key1.mp3",
-                    "Sounds/holypanda/holypanda-press_key2.mp3",
-                    "Sounds/holypanda/holypanda-press_key3.mp3",
-                    "Sounds/holypanda/holypanda-press_key4.mp3",
-                    "Sounds/holypanda/holypanda-press_key5.mp3"
-                ],
-                keyUp: [
-                    "Sounds/holypanda/holypanda-release_key.mp3"
-                ],
-                spaceDown: ["Sounds/holypanda/holypanda-press_space.mp3"],
-                spaceUp: ["Sounds/holypanda/holypanda-release_space.mp3"],
-                enterDown: ["Sounds/holypanda/holypanda-press_enter.mp3"],
-                enterUp: ["Sounds/holypanda/holypanda-release_enter.mp3"],
-                backspaceDown: ["Sounds/holypanda/holypanda-press_back.mp3"],
-                backspaceUp: ["Sounds/holypanda/holypanda-release_back.mp3"]
+        case .mechvibesGateronBrownsRevolt:
+            bank = loadBankFromMechvibesConfig(
+                resourceDirectory: "Sounds/mv-gateron-browns-revolt",
+                configFilename: "config-gateron-browns-revolt.json"
             )
-        case .gateronBlackInk:
-            bank = loadBank(
-                keyDown: [
-                    "Sounds/gateronblack/gateronblack-press_key1.mp3",
-                    "Sounds/gateronblack/gateronblack-press_key2.mp3",
-                    "Sounds/gateronblack/gateronblack-press_key3.mp3",
-                    "Sounds/gateronblack/gateronblack-press_key4.mp3",
-                    "Sounds/gateronblack/gateronblack-press_key5.mp3"
-                ],
-                keyUp: [
-                    "Sounds/gateronblack/gateronblack-release_key.mp3"
-                ],
-                spaceDown: ["Sounds/gateronblack/gateronblack-press_space.mp3"],
-                spaceUp: ["Sounds/gateronblack/gateronblack-release_space.mp3"],
-                enterDown: ["Sounds/gateronblack/gateronblack-press_enter.mp3"],
-                enterUp: ["Sounds/gateronblack/gateronblack-release_enter.mp3"],
-                backspaceDown: ["Sounds/gateronblack/gateronblack-press_back.mp3"],
-                backspaceUp: ["Sounds/gateronblack/gateronblack-release_back.mp3"]
+        case .mechvibesHyperXAqua:
+            bank = loadBankFromMechvibesConfig(
+                resourceDirectory: "Sounds/mv-hyperx-aqua",
+                configFilename: "config-hyperx-aqua.json"
             )
-        case .mxBrown:
-            bank = loadBank(
-                keyDown: [
-                    "Sounds/mxbrown/mxbrown-press_key1.mp3",
-                    "Sounds/mxbrown/mxbrown-press_key2.mp3",
-                    "Sounds/mxbrown/mxbrown-press_key3.mp3",
-                    "Sounds/mxbrown/mxbrown-press_key4.mp3",
-                    "Sounds/mxbrown/mxbrown-press_key5.mp3"
-                ],
-                keyUp: ["Sounds/mxbrown/mxbrown-release_key.mp3"],
-                spaceDown: ["Sounds/mxbrown/mxbrown-press_space.mp3"],
-                spaceUp: ["Sounds/mxbrown/mxbrown-release_space.mp3"],
-                enterDown: ["Sounds/mxbrown/mxbrown-press_enter.mp3"],
-                enterUp: ["Sounds/mxbrown/mxbrown-release_enter.mp3"],
-                backspaceDown: ["Sounds/mxbrown/mxbrown-press_back.mp3"],
-                backspaceUp: ["Sounds/mxbrown/mxbrown-release_back.mp3"]
+        case .mechvibesBoxJade:
+            bank = loadBankFromMechvibesConfig(
+                resourceDirectory: "Sounds/mv-boxjade",
+                configFilename: "config-boxjade.json"
             )
-        case .mxBlack:
-            bank = loadBank(
-                keyDown: [
-                    "Sounds/mxblack/mxblack-press_key1.mp3",
-                    "Sounds/mxblack/mxblack-press_key2.mp3",
-                    "Sounds/mxblack/mxblack-press_key3.mp3",
-                    "Sounds/mxblack/mxblack-press_key4.mp3",
-                    "Sounds/mxblack/mxblack-press_key5.mp3"
-                ],
-                keyUp: ["Sounds/mxblack/mxblack-release_key.mp3"],
-                spaceDown: ["Sounds/mxblack/mxblack-press_space.mp3"],
-                spaceUp: ["Sounds/mxblack/mxblack-release_space.mp3"],
-                enterDown: ["Sounds/mxblack/mxblack-press_enter.mp3"],
-                enterUp: ["Sounds/mxblack/mxblack-release_enter.mp3"],
-                backspaceDown: ["Sounds/mxblack/mxblack-press_back.mp3"],
-                backspaceUp: ["Sounds/mxblack/mxblack-release_back.mp3"]
-            )
-        case .gateronRedInk:
-            bank = loadBank(
-                keyDown: [
-                    "Sounds/gateronred/gateronred-press_key1.mp3",
-                    "Sounds/gateronred/gateronred-press_key2.mp3",
-                    "Sounds/gateronred/gateronred-press_key3.mp3",
-                    "Sounds/gateronred/gateronred-press_key4.mp3",
-                    "Sounds/gateronred/gateronred-press_key5.mp3"
-                ],
-                keyUp: ["Sounds/gateronred/gateronred-release_key.mp3"],
-                spaceDown: ["Sounds/gateronred/gateronred-press_space.mp3"],
-                spaceUp: ["Sounds/gateronred/gateronred-release_space.mp3"],
-                enterDown: ["Sounds/gateronred/gateronred-press_enter.mp3"],
-                enterUp: ["Sounds/gateronred/gateronred-release_enter.mp3"],
-                backspaceDown: ["Sounds/gateronred/gateronred-press_back.mp3"],
-                backspaceUp: ["Sounds/gateronred/gateronred-release_back.mp3"]
-            )
-        case .alpaca:
-            bank = loadBank(
-                keyDown: [
-                    "Sounds/alpaca/alpaca-press_key1.mp3",
-                    "Sounds/alpaca/alpaca-press_key2.mp3",
-                    "Sounds/alpaca/alpaca-press_key3.mp3",
-                    "Sounds/alpaca/alpaca-press_key4.mp3",
-                    "Sounds/alpaca/alpaca-press_key5.mp3"
-                ],
-                keyUp: ["Sounds/alpaca/alpaca-release_key.mp3"],
-                spaceDown: ["Sounds/alpaca/alpaca-press_space.mp3"],
-                spaceUp: ["Sounds/alpaca/alpaca-release_space.mp3"],
-                enterDown: ["Sounds/alpaca/alpaca-press_enter.mp3"],
-                enterUp: ["Sounds/alpaca/alpaca-release_enter.mp3"],
-                backspaceDown: ["Sounds/alpaca/alpaca-press_back.mp3"],
-                backspaceUp: ["Sounds/alpaca/alpaca-release_back.mp3"]
+        case .mechvibesOperaGX:
+            bank = loadBankFromMechvibesConfig(
+                resourceDirectory: "Sounds/mv-opera-gx",
+                configFilename: "config-opera-gx.json"
             )
         }
     }
@@ -1820,9 +1570,6 @@ final class ClickSoundEngine {
 
         // Interrupt when queue starts to lag behind live typing.
         let shouldInterrupt = interruptIfNeeded || queueOverflowInterrupt
-        if queueOverflowInterrupt {
-            NSLog("Audio queue overflow detected: forcing interrupt to keep typing in sync")
-        }
         let options: AVAudioPlayerNodeBufferOptions = shouldInterrupt ? [.interrupts] : []
         player.scheduleBuffer(copy, at: nil, options: options, completionHandler: nil)
         if !player.isPlaying {
@@ -1904,6 +1651,92 @@ final class ClickSoundEngine {
         return loaded
     }
 
+    private enum MechvibesDefineValue: Decodable {
+        case file(String)
+        case sprite([Double])
+        case none
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if container.decodeNil() {
+                self = .none
+                return
+            }
+            if let file = try? container.decode(String.self) {
+                self = .file(file)
+                return
+            }
+            if let sprite = try? container.decode([Double].self) {
+                self = .sprite(sprite)
+                return
+            }
+            self = .none
+        }
+    }
+
+    private struct MechvibesConfig: Decodable {
+        let sound: String?
+        let key_define_type: String?
+        let defines: [String: MechvibesDefineValue]
+    }
+
+    private func loadBankFromMechvibesConfig(resourceDirectory: String, configFilename: String) -> SampleBank {
+        let configPath = "\(resourceDirectory)/\(configFilename)"
+        guard let configURL = resolveResourceURL(path: configPath) else {
+            NSLog("Missing Mechvibes config: \(configPath)")
+            return bank
+        }
+
+        let config: MechvibesConfig
+        do {
+            let data = try Data(contentsOf: configURL)
+            config = try JSONDecoder().decode(MechvibesConfig.self, from: data)
+        } catch {
+            NSLog("Failed to decode Mechvibes config \(configPath): \(error)")
+            return bank
+        }
+
+        let isMulti = (config.key_define_type ?? "single") == "multi"
+
+        func stringFile(for keyCode: Int) -> String? {
+            guard let value = config.defines[String(keyCode)] else { return nil }
+            if case let .file(file) = value, !file.isEmpty { return file }
+            return nil
+        }
+
+        var keyDownFiles: [String] = []
+        if isMulti {
+            let allFiles = config.defines.values.compactMap { value -> String? in
+                if case let .file(file) = value, !file.isEmpty { return file }
+                return nil
+            }
+            keyDownFiles = Array(Set(allFiles)).sorted()
+        } else if let sound = config.sound, !sound.isEmpty {
+            keyDownFiles = [sound]
+        }
+
+        let fallback = keyDownFiles.first
+        let spaceFile = stringFile(for: 57) ?? fallback
+        let enterFile = stringFile(for: 28) ?? fallback
+        let backspaceFile = stringFile(for: 14) ?? fallback
+
+        func prefixed(_ file: String?) -> [String] {
+            guard let file, !file.isEmpty else { return [] }
+            return ["\(resourceDirectory)/\(file)"]
+        }
+
+        return loadBank(
+            keyDown: keyDownFiles.map { "\(resourceDirectory)/\($0)" },
+            keyUp: [],
+            spaceDown: prefixed(spaceFile),
+            spaceUp: [],
+            enterDown: prefixed(enterFile),
+            enterUp: [],
+            backspaceDown: prefixed(backspaceFile),
+            backspaceUp: []
+        )
+    }
+
     private func expandSamples(_ source: [AVAudioPCMBuffer], variantsPerSample: Int) -> [AVAudioPCMBuffer] {
         guard !source.isEmpty else { return [] }
         var out: [AVAudioPCMBuffer] = []
@@ -1951,25 +1784,7 @@ final class ClickSoundEngine {
     }
 
     private func loadPCMBuffer(resourcePath: String) -> AVAudioPCMBuffer? {
-        guard let baseURL = Bundle.module.resourceURL else {
-            NSLog("Bundle.module.resourceURL is missing")
-            return nil
-        }
-
-        let directURL = baseURL.appendingPathComponent(resourcePath)
-        let filename = (resourcePath as NSString).lastPathComponent
-        let flatURL = baseURL.appendingPathComponent(filename)
-        let nsFilename = filename as NSString
-        let bundleURL = Bundle.module.url(
-            forResource: nsFilename.deletingPathExtension,
-            withExtension: nsFilename.pathExtension
-        )
-
-        let candidateURL = [directURL, flatURL, bundleURL].compactMap { $0 }.first {
-            FileManager.default.fileExists(atPath: $0.path)
-        }
-
-        guard let url = candidateURL else {
+        guard let url = resolveResourceURL(path: resourcePath) else {
             NSLog("Missing audio resource: \(resourcePath)")
             return nil
         }
@@ -1991,6 +1806,38 @@ final class ClickSoundEngine {
         } catch {
             NSLog("Failed to load sample \(resourcePath): \(error)")
             return nil
+        }
+    }
+
+    private func resolveResourceURL(path: String) -> URL? {
+        guard let baseURL = Bundle.module.resourceURL else { return nil }
+        let requested = path as NSString
+        let filename = requested.lastPathComponent
+        let nsFilename = filename as NSString
+        var candidates: [URL] = []
+
+        let directURL = baseURL.appendingPathComponent(path)
+        let flatURL = baseURL.appendingPathComponent(filename)
+        let bundleURL = Bundle.module.url(
+            forResource: nsFilename.deletingPathExtension,
+            withExtension: nsFilename.pathExtension
+        )
+        candidates.append(contentsOf: [directURL, flatURL, bundleURL].compactMap { $0 })
+
+        if requested.pathExtension.lowercased() == "ogg" {
+            let wavRelative = requested.deletingPathExtension + ".wav"
+            let wavFilename = (wavRelative as NSString).lastPathComponent
+            let wavDirect = baseURL.appendingPathComponent(wavRelative)
+            let wavFlat = baseURL.appendingPathComponent(wavFilename)
+            let wavBundle = Bundle.module.url(
+                forResource: (wavFilename as NSString).deletingPathExtension,
+                withExtension: "wav"
+            )
+            candidates.append(contentsOf: [wavDirect, wavFlat, wavBundle].compactMap { $0 })
+        }
+
+        return candidates.first {
+            FileManager.default.fileExists(atPath: $0.path)
         }
     }
 
