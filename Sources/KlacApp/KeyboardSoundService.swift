@@ -515,7 +515,7 @@ final class KeyboardSoundService: ObservableObject {
             return id
         }
         // Stable fallback for this app build/install pipeline.
-        return "com.tumowuh.klac"
+        return "com.klacapp.klac"
     }
 
     private func resolveAppBundleURL() -> URL? {

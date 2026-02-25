@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 APP_NAME="Klac"
 EXEC_NAME="KlacApp"
-BUNDLE_ID="com.tumowuh.klac"
+BUNDLE_ID="com.klacapp.klac"
 APP_VERSION="${APP_VERSION:-1.6.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 SWIFT_BUILD_JOBS="${SWIFT_BUILD_JOBS:-2}"
