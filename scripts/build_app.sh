@@ -7,8 +7,9 @@ cd "$ROOT_DIR"
 APP_NAME="Klac"
 EXEC_NAME="KlacApp"
 BUNDLE_ID="com.klacapp.klac"
-APP_VERSION="${APP_VERSION:-1.6.0}"
+APP_VERSION="${APP_VERSION:-1.7.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
+BUILD_TAG="${BUILD_TAG:-core}"
 SWIFT_BUILD_JOBS="${SWIFT_BUILD_JOBS:-2}"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 DIST_DIR="$ROOT_DIR/dist"
@@ -74,6 +75,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <string>$APP_VERSION</string>
   <key>CFBundleVersion</key>
   <string>$BUILD_NUMBER</string>
+  <key>KlacBuildTag</key>
+  <string>$BUILD_TAG</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>LSUIElement</key>

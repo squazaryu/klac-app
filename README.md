@@ -16,7 +16,7 @@
 ## Возможности
 - Глобальный перехват `keyDown/keyUp` через `CGEventTap`.
 - Fallback на `NSEvent` global monitor, если `CGEventTap` недоступен.
-- Профили свитчей на реальных `wav/mp3` сэмплах + `Custom Pack` (импорт папки/zip).
+- Профили свитчей на реальных `wav/mp3` сэмплах + встроенные Mechvibes-паки.
 - Раздельные уровни звука: `Громкость`, `Нажатие`, `Отпускание`, `Space/Enter`, `Вариативность`.
 - Автокомпенсация громкости относительно системного volume.
 - Адаптация громкости к скорости печати (`CPS/WPM`) с авто-бейзлайном.
@@ -52,18 +52,12 @@
   - выбери функцию (`Компенсация`, `Адаптация`, `Лимитер`);
   - нажми `Сравнить OFF/ON` для двух последовательных тестов.
 
-### Импорт своего sound pack
-1. Открой `Шестеренка -> Звук -> Импорт Sound Pack`.
-2. Выбери папку или `.zip` с сэмплами.
-3. Профиль переключится на `Custom Pack`.
-
-Поддерживаемые префиксы файлов:
-- `key-down*`, `key-up*`
-- `space-down*`, `space-up*`
-- `enter-down*`, `enter-up*`
-- `backspace-down*`, `backspace-up*`
-
-Поддерживаемые форматы: `wav`, `mp3`, `m4a`, `aif`, `aiff`.
+### Встроенные sound packs
+- `Kalih Box White`
+- `Mechvibes: Gateron Browns - Revolt`
+- `Mechvibes: HyperX Aqua`
+- `Mechvibes: Box Jade`
+- `Mechvibes: Opera GX`
 
 ## Требования
 - macOS 13+
@@ -113,6 +107,17 @@ tccutil reset ListenEvent com.klacapp.klac
 - Добавлена расширенная диагностика запуска захвата клавиатуры.
 - Улучшен `Stack-режим`: контраст между `0%` и `100%` стал заметно выше.
 
+## Что нового в 1.7.0
+- Добавлены 4 встроенных профиля Mechvibes:
+  - `Gateron Browns - Revolt`
+  - `HyperX Aqua`
+  - `Box Jade`
+  - `Opera GX`
+- Удалены старые встроенные профили, оставлен компактный набор под Mechvibes.
+- Удалена функция самостоятельного импорта sound pack из UI.
+- Добавлен build tag в версии приложения: формат `vX.Y.Z (bN-tag)`.
+- Обновлен компактный liquid-glass UI: плотнее layout и выше читаемость в dark theme.
+
 ## Что нового в 1.6.0
 - Добавлен профиль `Kalih Box White` в список встроенных sound packs.
 - Добавлен режим `Авто-нормализация (inverse-кривая)` с целевым уровнем `@100%`.
@@ -140,7 +145,7 @@ SIGN_IDENTITY="Apple Development: YOUR_NAME (TEAMID)" ./scripts/build_app.sh --i
 ## Релизы в GitHub
 ```bash
 cd "/path/to/project"
-./scripts/release.sh v1.6.0
+./scripts/release.sh v1.7.0
 ```
 
 Что делает `release.sh`:
@@ -152,9 +157,9 @@ cd "/path/to/project"
 
 Полезные флаги:
 ```bash
-./scripts/release.sh v1.6.0 --dry-run
-./scripts/release.sh v1.6.0 --notes-file RELEASE_NOTES.md
-./scripts/release.sh v1.6.0 --skip-push
+./scripts/release.sh v1.7.0 --dry-run
+./scripts/release.sh v1.7.0 --notes-file RELEASE_NOTES.md
+./scripts/release.sh v1.7.0 --skip-push
 ```
 
 ## Лицензия
