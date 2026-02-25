@@ -155,16 +155,18 @@ cd "/path/to/project"
 
 Что делает `release.sh`:
 1. Собирает релизный `.app` в `dist/`.
-2. Упаковывает архив `dist/*-vX.Y.Z.zip`.
-3. Создает git tag.
-4. Пушит `main` и tag.
-5. Создает GitHub Release через `gh` и прикладывает zip.
+2. Упаковывает архив `dist/Klac-vX.Y.Z.zip`.
+3. Собирает `drag-and-drop` образ `dist/Klac-vX.Y.Z.dmg` (с ярлыком `Applications`).
+4. Создает git tag.
+5. Пушит `main` и tag.
+6. Создает GitHub Release через `gh` и прикладывает `zip + dmg`.
 
 Полезные флаги:
 ```bash
 ./scripts/release.sh v1.7.1 --dry-run
 ./scripts/release.sh v1.7.1 --notes-file RELEASE_NOTES.md
 ./scripts/release.sh v1.7.1 --skip-push
+./scripts/release.sh v1.7.1 --zip-only
 ```
 
 ## Лицензия
