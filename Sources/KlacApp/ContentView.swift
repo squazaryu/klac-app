@@ -1,10 +1,21 @@
 import SwiftUI
 import AppKit
 
+private enum AdvancedSettingsWindowHost {
+    static var window: NSWindow?
+    static let closeDelegate = AdvancedSettingsWindowCloseDelegate()
+}
+
+private final class AdvancedSettingsWindowCloseDelegate: NSObject, NSWindowDelegate {
+    func windowWillClose(_ notification: Notification) {
+        _ = notification
+        AdvancedSettingsWindowHost.window = nil
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject private var service: KeyboardSoundService
     @Environment(\.colorScheme) private var systemColorScheme
-    @State private var showAdvancedPopover = false
     @State private var showAccessHintPopover = false
     private let panelWidth: CGFloat = 266
 
@@ -125,15 +136,12 @@ struct ContentView: View {
             Spacer()
             HStack(spacing: 10) {
                 Button {
-                    showAdvancedPopover.toggle()
+                    openAdvancedSettingsWindow()
                 } label: {
                     Image(systemName: "gearshape.fill")
                         .font(.system(size: 14, weight: .semibold))
                 }
                 .buttonStyle(MinimalLiquidActionButtonStyle())
-                .popover(isPresented: $showAdvancedPopover, arrowEdge: .top) {
-                    AdvancedSettingsView(service: service)
-                }
 
                 Toggle("", isOn: $service.isEnabled)
                     .toggleStyle(.switch)
@@ -145,6 +153,34 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func openAdvancedSettingsWindow() {
+        if let window = AdvancedSettingsWindowHost.window {
+            window.makeKeyAndOrderFront(nil)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let root = AdvancedSettingsView(
+            service: service,
+            onClose: {
+                AdvancedSettingsWindowHost.window?.close()
+            }
+        )
+        let host = NSHostingController(rootView: root)
+        let window = NSWindow(contentViewController: host)
+        window.title = "Klac — Настройки"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.setFrame(NSRect(x: 0, y: 0, width: 560, height: 680), display: false)
+        window.minSize = NSSize(width: 520, height: 560)
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.setFrameAutosaveName("Klac.AdvancedSettingsWindow")
+        window.delegate = AdvancedSettingsWindowHost.closeDelegate
+        window.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        AdvancedSettingsWindowHost.window = window
     }
 
     private var compactMainCard: some View {
@@ -271,6 +307,7 @@ private struct AdvancedSettingsView: View {
     @ObservedObject var service: KeyboardSoundService
     @Environment(\.colorScheme) private var systemColorScheme
     @Environment(\.dismiss) private var dismiss
+    var onClose: (() -> Void)? = nil
 
     var body: some View {
         ScrollView {
@@ -455,13 +492,19 @@ private struct AdvancedSettingsView: View {
 
                 HStack {
                     Spacer()
-                    Button("Закрыть") { dismiss() }
+                    Button("Закрыть") {
+                        if let onClose {
+                            onClose()
+                        } else {
+                            dismiss()
+                        }
+                    }
                         .buttonStyle(PrimaryGlassButtonStyle())
                 }
             }
             .padding(16)
         }
-        .frame(width: 520, height: 560)
+        .frame(minWidth: 520, idealWidth: 640, maxWidth: .infinity, minHeight: 560, idealHeight: 760, maxHeight: .infinity)
         .background(
             LinearGradient(
                 colors: isDarkTheme
