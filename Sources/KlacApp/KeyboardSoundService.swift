@@ -743,6 +743,7 @@ final class KeyboardSoundService: ObservableObject {
                 guard let self else { return }
                 defer { self.systemPollInFlight = false }
 
+                let wasVolumeAvailable = self.detectedSystemVolumeAvailable
                 self.detectedSystemVolumeAvailable = scalar != nil
                 if let scalar {
                     self.detectedSystemVolumePercent = scalar * 100.0
@@ -763,7 +764,14 @@ final class KeyboardSoundService: ObservableObject {
                     self.soundEngine.handleOutputDeviceChanged()
                 }
 
-                if volumeChanged || deviceChanged {
+                // Some Bluetooth transitions keep the same device UID but momentarily
+                // drop/recreate the underlying stream graph.
+                let availabilityChanged = wasVolumeAvailable != self.detectedSystemVolumeAvailable
+                if availabilityChanged && !deviceChanged {
+                    self.soundEngine.handleOutputDeviceChanged()
+                }
+
+                if volumeChanged || deviceChanged || availabilityChanged {
                     self.updateDynamicCompensation()
                 }
             }
@@ -1307,9 +1315,16 @@ final class ClickSoundEngine {
     private var lastOutputDeviceReinit: CFAbsoluteTime = 0
     private let scheduleLock = NSLock()
     private var estimatedPlaybackEndTime: CFAbsoluteTime = 0
+    private var engineConfigObserver: NSObjectProtocol?
 
     init() {
         rebuildAudioGraph()
+    }
+
+    deinit {
+        if let engineConfigObserver {
+            NotificationCenter.default.removeObserver(engineConfigObserver)
+        }
     }
 
     func setProfile(_ profile: SoundProfile) {
@@ -1421,6 +1436,11 @@ final class ClickSoundEngine {
     }
 
     private func rebuildAudioGraph() {
+        if let engineConfigObserver {
+            NotificationCenter.default.removeObserver(engineConfigObserver)
+            self.engineConfigObserver = nil
+        }
+
         let newEngine = AVAudioEngine()
         let newPlayer = AVAudioPlayerNode()
         newEngine.attach(newPlayer)
@@ -1428,6 +1448,15 @@ final class ClickSoundEngine {
         newEngine.mainMixerNode.outputVolume = 1.0
         engine = newEngine
         player = newPlayer
+
+        engineConfigObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: newEngine,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleOutputDeviceChanged()
+        }
+
         scheduleLock.lock()
         estimatedPlaybackEndTime = 0
         scheduleLock.unlock()
@@ -1469,10 +1498,12 @@ final class ClickSoundEngine {
             let dt = now - lastDownHitTime
             lastDownHitTime = now
             let density = stackDensity.clamped(to: 0.0 ... 1.0)
-            let proximity = Float(max(0.0, 1.0 - dt / 0.18))
-            let stackBoost = 1.0 + (density * density) * proximity * 3.2
-            gain = (gain * stackBoost).clamped(to: 0.03 ... 18.0)
-            interrupt = density > 0.25
+            let proximity = Float(max(0.0, 1.0 - dt / 0.14))
+            let stackBoost = 1.0 + (density * density) * proximity * 1.35
+            gain = (gain * stackBoost).clamped(to: 0.03 ... 8.0)
+            gain = softKneeCompress(gain, kneeStart: 1.6, max: 2.4)
+            let interruptChance = ((density - 0.40) / 0.60).clamped(to: 0.0 ... 1.0) * proximity
+            interrupt = Float.random(in: 0 ... 1) < interruptChance
         }
         schedule(pickSample(from: pool, group: group), gain: gain, interruptIfNeeded: interrupt)
     }
@@ -1510,11 +1541,20 @@ final class ClickSoundEngine {
         let releaseJitterScale: Float = strictLevelingEnabled ? 0.02 : 0.16
         var gain = (masterVolume * releaseLevel * dynamicCompensationGain * typingSpeedGain + Float.random(in: -effectiveVariation ... effectiveVariation) * releaseJitterScale).clamped(to: 0.02 ... 8.0)
         if stackModeEnabled && !strictLevelingEnabled {
-            let tailCut = (1.0 - stackDensity * 0.9).clamped(to: 0.08 ... 1.0)
-            gain = (gain * tailCut).clamped(to: 0.01 ... 1.3)
+            let tailCut = (1.0 - stackDensity * 0.78).clamped(to: 0.15 ... 1.0)
+            gain = (gain * tailCut).clamped(to: 0.01 ... 1.1)
+            gain = softKneeCompress(gain, kneeStart: 0.55, max: 0.85)
         }
-        let interrupt = !strictLevelingEnabled && stackModeEnabled && stackDensity > 0.25
+        let releaseInterruptChance = ((stackDensity - 0.55) / 0.45).clamped(to: 0.0 ... 1.0) * 0.7
+        let interrupt = !strictLevelingEnabled && stackModeEnabled && Float.random(in: 0 ... 1) < releaseInterruptChance
         schedule(pickSample(from: pool, group: group), gain: gain, interruptIfNeeded: interrupt)
+    }
+
+    private func softKneeCompress(_ value: Float, kneeStart: Float, max: Float) -> Float {
+        guard value > kneeStart else { return value }
+        let overflow = value - kneeStart
+        let compressed = kneeStart + overflow * 0.35
+        return min(compressed, max)
     }
 
     private func schedule(_ buffer: AVAudioPCMBuffer?, gain: Float, interruptIfNeeded: Bool) {
