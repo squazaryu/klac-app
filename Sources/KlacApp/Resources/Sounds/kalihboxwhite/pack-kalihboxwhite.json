@@ -1,0 +1,150 @@
+{
+  "groups": {
+    "alpha": {
+      "soft": [
+        "kalihboxwhite-press_key1.mp3",
+        "kalihboxwhite-press_key2.mp3",
+        "kalihboxwhite-press_key3.mp3"
+      ],
+      "medium": [
+        "kalihboxwhite-press_key4.mp3",
+        "kalihboxwhite-press_key5.mp3",
+        "kalihboxwhite-press_key6.mp3"
+      ],
+      "hard": [
+        "kalihboxwhite-press_key7.mp3",
+        "kalihboxwhite-press_key8.mp3"
+      ],
+      "slam": [
+        "kalihboxwhite-press_key9.mp3",
+        "kalihboxwhite-press_key10.mp3"
+      ]
+    },
+    "modifier": {
+      "soft": [
+        "kalihboxwhite-press_key1.mp3",
+        "kalihboxwhite-press_key2.mp3"
+      ],
+      "medium": [
+        "kalihboxwhite-press_key4.mp3",
+        "kalihboxwhite-press_key5.mp3"
+      ],
+      "hard": [
+        "kalihboxwhite-press_key7.mp3"
+      ],
+      "slam": [
+        "kalihboxwhite-press_key9.mp3"
+      ]
+    },
+    "function": {
+      "soft": [
+        "kalihboxwhite-press_key1.mp3"
+      ],
+      "medium": [
+        "kalihboxwhite-press_key4.mp3"
+      ],
+      "hard": [
+        "kalihboxwhite-press_key7.mp3"
+      ],
+      "slam": [
+        "kalihboxwhite-press_key9.mp3"
+      ]
+    },
+    "arrow": {
+      "soft": [
+        "kalihboxwhite-press_key2.mp3"
+      ],
+      "medium": [
+        "kalihboxwhite-press_key5.mp3"
+      ],
+      "hard": [
+        "kalihboxwhite-press_key8.mp3"
+      ],
+      "slam": [
+        "kalihboxwhite-press_key10.mp3"
+      ]
+    },
+    "space": {
+      "soft": [
+        "kalihboxwhite-press_space.mp3"
+      ],
+      "medium": [
+        "kalihboxwhite-press_space.mp3"
+      ],
+      "hard": [
+        "kalihboxwhite-press_space.mp3"
+      ],
+      "slam": [
+        "kalihboxwhite-press_space.mp3"
+      ]
+    },
+    "enter": {
+      "soft": [
+        "kalihboxwhite-press_enter.mp3"
+      ],
+      "medium": [
+        "kalihboxwhite-press_enter.mp3"
+      ],
+      "hard": [
+        "kalihboxwhite-press_enter.mp3"
+      ],
+      "slam": [
+        "kalihboxwhite-press_enter.mp3"
+      ]
+    },
+    "delete": {
+      "soft": [
+        "kalihboxwhite-press_back.mp3"
+      ],
+      "medium": [
+        "kalihboxwhite-press_back.mp3"
+      ],
+      "hard": [
+        "kalihboxwhite-press_back.mp3"
+      ],
+      "slam": [
+        "kalihboxwhite-press_back.mp3"
+      ]
+    },
+    "other": {
+      "soft": [
+        "kalihboxwhite-press_key1.mp3"
+      ],
+      "medium": [
+        "kalihboxwhite-press_key4.mp3"
+      ],
+      "hard": [
+        "kalihboxwhite-press_key7.mp3"
+      ],
+      "slam": [
+        "kalihboxwhite-press_key9.mp3"
+      ]
+    }
+  },
+  "release": {
+    "alpha": [
+      "kalihboxwhite-release_key.mp3"
+    ],
+    "modifier": [
+      "kalihboxwhite-release_key.mp3"
+    ],
+    "function": [
+      "kalihboxwhite-release_key.mp3"
+    ],
+    "arrow": [
+      "kalihboxwhite-release_key.mp3"
+    ],
+    "space": [
+      "kalihboxwhite-release_space.mp3"
+    ],
+    "enter": [
+      "kalihboxwhite-release_enter.mp3"
+    ],
+    "delete": [
+      "kalihboxwhite-release_back.mp3"
+    ],
+    "other": [
+      "kalihboxwhite-release_key.mp3"
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "groups": {
+    "alpha": {"soft": ["boxjade.wav"], "medium": ["boxjade.wav"], "hard": ["boxjade.wav"], "slam": ["boxjade.wav"]},
+    "modifier": {"soft": ["boxjade.wav"], "medium": ["boxjade.wav"], "hard": ["boxjade.wav"], "slam": ["boxjade.wav"]},
+    "function": {"soft": ["boxjade.wav"], "medium": ["boxjade.wav"], "hard": ["boxjade.wav"], "slam": ["boxjade.wav"]},
+    "arrow": {"soft": ["boxjade.wav"], "medium": ["boxjade.wav"], "hard": ["boxjade.wav"], "slam": ["boxjade.wav"]},
+    "space": {"soft": ["boxjade.wav"], "medium": ["boxjade.wav"], "hard": ["boxjade.wav"], "slam": ["boxjade.wav"]},
+    "enter": {"soft": ["boxjade.wav"], "medium": ["boxjade.wav"], "hard": ["boxjade.wav"], "slam": ["boxjade.wav"]},
+    "delete": {"soft": ["boxjade.wav"], "medium": ["boxjade.wav"], "hard": ["boxjade.wav"], "slam": ["boxjade.wav"]},
+    "other": {"soft": ["boxjade.wav"], "medium": ["boxjade.wav"], "hard": ["boxjade.wav"], "slam": ["boxjade.wav"]}
+  },
+  "release": {
+    "alpha": ["boxjade.wav"],
+    "modifier": ["boxjade.wav"],
+    "function": ["boxjade.wav"],
+    "arrow": ["boxjade.wav"],
+    "space": ["boxjade.wav"],
+    "enter": ["boxjade.wav"],
+    "delete": ["boxjade.wav"],
+    "other": ["boxjade.wav"]
+  }
+}

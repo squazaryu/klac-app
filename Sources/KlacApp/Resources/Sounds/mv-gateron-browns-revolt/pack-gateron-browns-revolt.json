@@ -1,0 +1,22 @@
+{
+  "groups": {
+    "alpha": {"soft": ["Gateron Brown.wav"], "medium": ["Gateron Brown.wav"], "hard": ["Gateron Brown.wav"], "slam": ["Gateron Brown.wav"]},
+    "modifier": {"soft": ["Gateron Brown.wav"], "medium": ["Gateron Brown.wav"], "hard": ["Gateron Brown.wav"], "slam": ["Gateron Brown.wav"]},
+    "function": {"soft": ["Gateron Brown.wav"], "medium": ["Gateron Brown.wav"], "hard": ["Gateron Brown.wav"], "slam": ["Gateron Brown.wav"]},
+    "arrow": {"soft": ["Gateron Brown.wav"], "medium": ["Gateron Brown.wav"], "hard": ["Gateron Brown.wav"], "slam": ["Gateron Brown.wav"]},
+    "space": {"soft": ["Gateron Brown.wav"], "medium": ["Gateron Brown.wav"], "hard": ["Gateron Brown.wav"], "slam": ["Gateron Brown.wav"]},
+    "enter": {"soft": ["Gateron Brown.wav"], "medium": ["Gateron Brown.wav"], "hard": ["Gateron Brown.wav"], "slam": ["Gateron Brown.wav"]},
+    "delete": {"soft": ["Gateron Brown.wav"], "medium": ["Gateron Brown.wav"], "hard": ["Gateron Brown.wav"], "slam": ["Gateron Brown.wav"]},
+    "other": {"soft": ["Gateron Brown.wav"], "medium": ["Gateron Brown.wav"], "hard": ["Gateron Brown.wav"], "slam": ["Gateron Brown.wav"]}
+  },
+  "release": {
+    "alpha": ["Gateron Brown.wav"],
+    "modifier": ["Gateron Brown.wav"],
+    "function": ["Gateron Brown.wav"],
+    "arrow": ["Gateron Brown.wav"],
+    "space": ["Gateron Brown.wav"],
+    "enter": ["Gateron Brown.wav"],
+    "delete": ["Gateron Brown.wav"],
+    "other": ["Gateron Brown.wav"]
+  }
+}

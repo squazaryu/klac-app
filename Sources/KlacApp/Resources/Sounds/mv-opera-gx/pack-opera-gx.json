@@ -1,0 +1,22 @@
+{
+  "groups": {
+    "alpha": {"soft": ["1real.wav", "2real.wav", "3real.wav"], "medium": ["4real.wav", "5real.wav", "6real.wav"], "hard": ["7real.wav", "8real.wav", "9real.wav"], "slam": ["10real.wav", "11real.wav", "12real.wav"]},
+    "modifier": {"soft": ["1real.wav", "2real.wav"], "medium": ["4real.wav", "5real.wav"], "hard": ["7real.wav", "8real.wav"], "slam": ["10real.wav", "11real.wav"]},
+    "function": {"soft": ["1real.wav", "3real.wav"], "medium": ["4real.wav", "6real.wav"], "hard": ["7real.wav", "9real.wav"], "slam": ["10real.wav", "12real.wav"]},
+    "arrow": {"soft": ["2real.wav", "3real.wav"], "medium": ["5real.wav", "6real.wav"], "hard": ["8real.wav", "9real.wav"], "slam": ["11real.wav", "12real.wav"]},
+    "space": {"soft": ["space.wav"], "medium": ["space.wav"], "hard": ["space.wav"], "slam": ["space.wav"]},
+    "enter": {"soft": ["enter.wav"], "medium": ["enter.wav"], "hard": ["enter.wav"], "slam": ["enter.wav"]},
+    "delete": {"soft": ["backspace.wav"], "medium": ["backspace.wav"], "hard": ["backspace.wav"], "slam": ["backspace.wav"]},
+    "other": {"soft": ["1real.wav", "2real.wav"], "medium": ["4real.wav", "5real.wav"], "hard": ["7real.wav", "8real.wav"], "slam": ["10real.wav", "11real.wav"]}
+  },
+  "release": {
+    "alpha": ["1real.wav"],
+    "modifier": ["2real.wav"],
+    "function": ["3real.wav"],
+    "arrow": ["2real.wav"],
+    "space": ["space.wav"],
+    "enter": ["enter.wav"],
+    "delete": ["backspace.wav"],
+    "other": ["1real.wav"]
+  }
+}

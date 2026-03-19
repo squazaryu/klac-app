@@ -60,6 +60,14 @@ final class KeyboardSoundService: ObservableObject {
             defaults.set(variation, forKey: Keys.variation)
         }
     }
+    @Published var pitchVariation: Double = 0.22 {
+        didSet {
+            let clamped = pitchVariation.clamped(to: 0.0 ... 0.6)
+            defaults.set(clamped, forKey: Keys.pitchVariation)
+            soundEngine.pitchVariationAmount = Float(clamped)
+            soundEngine.reloadCurrentProfile()
+        }
+    }
     @Published var playKeyUp = true {
         didSet { defaults.set(playKeyUp, forKey: Keys.playKeyUp) }
     }
@@ -176,6 +184,52 @@ final class KeyboardSoundService: ObservableObject {
             soundEngine.stackDensity = Float(stackDensity)
         }
     }
+    @Published var layerThresholdSlam: Double = 0.045 {
+        didSet {
+            defaults.set(layerThresholdSlam, forKey: Keys.layerThresholdSlam)
+            applyLayerThresholds()
+        }
+    }
+    @Published var layerThresholdHard: Double = 0.085 {
+        didSet {
+            defaults.set(layerThresholdHard, forKey: Keys.layerThresholdHard)
+            applyLayerThresholds()
+        }
+    }
+    @Published var layerThresholdMedium: Double = 0.145 {
+        didSet {
+            defaults.set(layerThresholdMedium, forKey: Keys.layerThresholdMedium)
+            applyLayerThresholds()
+        }
+    }
+    @Published var minInterKeyGapMs: Double = 14 {
+        didSet {
+            let clamped = minInterKeyGapMs.clamped(to: 0 ... 45)
+            defaults.set(clamped, forKey: Keys.minInterKeyGapMs)
+            soundEngine.minInterKeyGapMs = Float(clamped)
+        }
+    }
+    @Published var releaseDuckingStrength: Double = 0.72 {
+        didSet {
+            let clamped = releaseDuckingStrength.clamped(to: 0 ... 1)
+            defaults.set(clamped, forKey: Keys.releaseDuckingStrength)
+            soundEngine.releaseDuckingStrength = Float(clamped)
+        }
+    }
+    @Published var releaseDuckingWindowMs: Double = 92 {
+        didSet {
+            let clamped = releaseDuckingWindowMs.clamped(to: 20 ... 180)
+            defaults.set(clamped, forKey: Keys.releaseDuckingWindowMs)
+            soundEngine.releaseDuckingWindowMs = Float(clamped)
+        }
+    }
+    @Published var releaseTailTightness: Double = 0.38 {
+        didSet {
+            let clamped = releaseTailTightness.clamped(to: 0 ... 1)
+            defaults.set(clamped, forKey: Keys.releaseTailTightness)
+            soundEngine.releaseTailTightness = Float(clamped)
+        }
+    }
     @Published var limiterEnabled = true {
         didSet {
             defaults.set(limiterEnabled, forKey: Keys.limiterEnabled)
@@ -203,6 +257,9 @@ final class KeyboardSoundService: ObservableObject {
             updateDynamicCompensation()
         }
     }
+    @Published var liveVelocityLayer = "medium"
+    @Published var manifestValidationSummary = "Проверка пака не запускалась"
+    @Published var manifestValidationIssues: [String] = []
     @Published var appearanceMode: AppearanceMode = .system {
         didSet { defaults.set(appearanceMode.rawValue, forKey: Keys.appearanceMode) }
     }
@@ -227,6 +284,7 @@ final class KeyboardSoundService: ObservableObject {
         static let isEnabled = "settings.isEnabled"
         static let volume = "settings.volume"
         static let variation = "settings.variation"
+        static let pitchVariation = "settings.pitchVariation"
         static let playKeyUp = "settings.playKeyUp"
         static let pressLevel = "settings.pressLevel"
         static let releaseLevel = "settings.releaseLevel"
@@ -246,6 +304,13 @@ final class KeyboardSoundService: ObservableObject {
         static let typingAdaptiveEnabled = "settings.typingAdaptiveEnabled"
         static let stackModeEnabled = "settings.stackModeEnabled"
         static let stackDensity = "settings.stackDensity"
+        static let layerThresholdSlam = "settings.layerThresholdSlam"
+        static let layerThresholdHard = "settings.layerThresholdHard"
+        static let layerThresholdMedium = "settings.layerThresholdMedium"
+        static let minInterKeyGapMs = "settings.minInterKeyGapMs"
+        static let releaseDuckingStrength = "settings.releaseDuckingStrength"
+        static let releaseDuckingWindowMs = "settings.releaseDuckingWindowMs"
+        static let releaseTailTightness = "settings.releaseTailTightness"
         static let limiterEnabled = "settings.limiterEnabled"
         static let limiterDrive = "settings.limiterDrive"
         static let outputDeviceBoosts = "settings.outputDeviceBoosts"
@@ -261,6 +326,9 @@ final class KeyboardSoundService: ObservableObject {
         }
         if defaults.object(forKey: Keys.variation) != nil {
             variation = defaults.double(forKey: Keys.variation)
+        }
+        if defaults.object(forKey: Keys.pitchVariation) != nil {
+            pitchVariation = defaults.double(forKey: Keys.pitchVariation).clamped(to: 0.0 ... 0.6)
         }
         if defaults.object(forKey: Keys.playKeyUp) != nil {
             playKeyUp = defaults.bool(forKey: Keys.playKeyUp)
@@ -320,6 +388,27 @@ final class KeyboardSoundService: ObservableObject {
         if defaults.object(forKey: Keys.stackDensity) != nil {
             stackDensity = defaults.double(forKey: Keys.stackDensity)
         }
+        if defaults.object(forKey: Keys.layerThresholdSlam) != nil {
+            layerThresholdSlam = defaults.double(forKey: Keys.layerThresholdSlam).clamped(to: 0.010 ... 0.120)
+        }
+        if defaults.object(forKey: Keys.layerThresholdHard) != nil {
+            layerThresholdHard = defaults.double(forKey: Keys.layerThresholdHard).clamped(to: 0.025 ... 0.180)
+        }
+        if defaults.object(forKey: Keys.layerThresholdMedium) != nil {
+            layerThresholdMedium = defaults.double(forKey: Keys.layerThresholdMedium).clamped(to: 0.040 ... 0.260)
+        }
+        if defaults.object(forKey: Keys.minInterKeyGapMs) != nil {
+            minInterKeyGapMs = defaults.double(forKey: Keys.minInterKeyGapMs).clamped(to: 0 ... 45)
+        }
+        if defaults.object(forKey: Keys.releaseDuckingStrength) != nil {
+            releaseDuckingStrength = defaults.double(forKey: Keys.releaseDuckingStrength).clamped(to: 0 ... 1)
+        }
+        if defaults.object(forKey: Keys.releaseDuckingWindowMs) != nil {
+            releaseDuckingWindowMs = defaults.double(forKey: Keys.releaseDuckingWindowMs).clamped(to: 20 ... 180)
+        }
+        if defaults.object(forKey: Keys.releaseTailTightness) != nil {
+            releaseTailTightness = defaults.double(forKey: Keys.releaseTailTightness).clamped(to: 0 ... 1)
+        }
         if defaults.object(forKey: Keys.limiterEnabled) != nil {
             limiterEnabled = defaults.bool(forKey: Keys.limiterEnabled)
         }
@@ -337,6 +426,7 @@ final class KeyboardSoundService: ObservableObject {
 
         soundEngine.masterVolume = Float(volume)
         soundEngine.variation = Float(variation)
+        soundEngine.pitchVariationAmount = Float(pitchVariation)
         soundEngine.pressLevel = Float(pressLevel)
         soundEngine.releaseLevel = Float(releaseLevel)
         soundEngine.spaceLevel = Float(spaceLevel)
@@ -345,6 +435,22 @@ final class KeyboardSoundService: ObservableObject {
         soundEngine.stackModeEnabled = stackModeEnabled
         soundEngine.stackDensity = Float(stackDensity)
         soundEngine.strictLevelingEnabled = strictVolumeNormalizationEnabled
+        soundEngine.minInterKeyGapMs = Float(minInterKeyGapMs)
+        soundEngine.releaseDuckingStrength = Float(releaseDuckingStrength)
+        soundEngine.releaseDuckingWindowMs = Float(releaseDuckingWindowMs)
+        soundEngine.releaseTailTightness = Float(releaseTailTightness)
+        applyLayerThresholds()
+        soundEngine.onVelocityLayerChanged = { [weak self] layer in
+            Task { @MainActor [weak self] in
+                self?.liveVelocityLayer = layer
+            }
+        }
+        soundEngine.onManifestValidation = { [weak self] summary, issues in
+            Task { @MainActor [weak self] in
+                self?.manifestValidationSummary = summary
+                self?.manifestValidationIssues = issues
+            }
+        }
         soundEngine.setProfile(selectedProfile)
         updateSystemVolumeMonitoringState()
         updateTypingDecayMonitoringState()
@@ -550,6 +656,38 @@ final class KeyboardSoundService: ObservableObject {
         if playKeyUp {
             soundEngine.playUp(for: 0)
         }
+    }
+
+    func applyHeadphonesPreset() {
+        volume = 0.62
+        variation = 0.42
+        pitchVariation = 0.28
+        pressLevel = 0.82
+        releaseLevel = 0.56
+        spaceLevel = 0.86
+        stackModeEnabled = false
+        limiterEnabled = true
+        limiterDrive = 1.1
+        minInterKeyGapMs = 18
+        releaseDuckingStrength = 0.86
+        releaseDuckingWindowMs = 105
+        releaseTailTightness = 0.62
+    }
+
+    func applySpeakersPreset() {
+        volume = 0.46
+        variation = 0.34
+        pitchVariation = 0.20
+        pressLevel = 0.72
+        releaseLevel = 0.50
+        spaceLevel = 0.78
+        stackModeEnabled = false
+        limiterEnabled = true
+        limiterDrive = 1.0
+        minInterKeyGapMs = 10
+        releaseDuckingStrength = 0.64
+        releaseDuckingWindowMs = 88
+        releaseTailTightness = 0.40
     }
 
     func playABComparison() {
@@ -809,6 +947,13 @@ final class KeyboardSoundService: ObservableObject {
         if abs(liveDynamicGain - next) > 0.005 {
             liveDynamicGain = next
         }
+    }
+
+    private func applyLayerThresholds() {
+        let slam = layerThresholdSlam.clamped(to: 0.010 ... 0.120)
+        let hard = max(slam + 0.006, layerThresholdHard).clamped(to: 0.025 ... 0.180)
+        let medium = max(hard + 0.006, layerThresholdMedium).clamped(to: 0.040 ... 0.260)
+        soundEngine.setVelocityThresholds(slam: slam, hard: hard, medium: medium)
     }
 
     func autoInverseGainPreview(systemVolumePercent: Double) -> Double {
@@ -1271,6 +1416,7 @@ final class ClickSoundEngine {
 
     var masterVolume: Float = 0.75
     var variation: Float = 0.3
+    var pitchVariationAmount: Float = 0.22
     var pressLevel: Float = 1.0
     var releaseLevel: Float = 0.65
     var spaceLevel: Float = 1.1
@@ -1281,41 +1427,71 @@ final class ClickSoundEngine {
     var stackDensity: Float = 0.55
     var limiterEnabled: Bool = true
     var limiterDrive: Float = 1.2
+    var minInterKeyGapMs: Float = 14
+    var releaseDuckingStrength: Float = 0.72
+    var releaseDuckingWindowMs: Float = 92
+    var releaseTailTightness: Float = 0.38
+    var onVelocityLayerChanged: ((String) -> Void)?
+    var onManifestValidation: ((String, [String]) -> Void)?
     private var lastDownHitTime: CFAbsoluteTime = 0
+    private var slamThreshold: CFAbsoluteTime = 0.045
+    private var hardThreshold: CFAbsoluteTime = 0.085
+    private var mediumThreshold: CFAbsoluteTime = 0.145
+    private var lastReportedLayer: VelocityLayer?
 
-    private struct SampleBank {
-        var keyDown: [AVAudioPCMBuffer]
-        var keyUp: [AVAudioPCMBuffer]
-        var spaceDown: [AVAudioPCMBuffer]
-        var spaceUp: [AVAudioPCMBuffer]
-        var enterDown: [AVAudioPCMBuffer]
-        var enterUp: [AVAudioPCMBuffer]
-        var backspaceDown: [AVAudioPCMBuffer]
-        var backspaceUp: [AVAudioPCMBuffer]
+    private enum KeyGroup: String, CaseIterable {
+        case alpha
+        case modifier
+        case function
+        case arrow
+        case space
+        case enter
+        case delete
+        case other
     }
 
-    private var bank = SampleBank(
-        keyDown: [],
-        keyUp: [],
-        spaceDown: [],
-        spaceUp: [],
-        enterDown: [],
-        enterUp: [],
-        backspaceDown: [],
-        backspaceUp: []
-    )
+    private enum VelocityLayer: String, CaseIterable {
+        case soft
+        case medium
+        case hard
+        case slam
+    }
+
+    private struct SampleBank {
+        var downLayers: [KeyGroup: [VelocityLayer: [AVAudioPCMBuffer]]]
+        var releaseSamples: [KeyGroup: [AVAudioPCMBuffer]]
+
+        static var empty: SampleBank {
+            SampleBank(downLayers: [:], releaseSamples: [:])
+        }
+
+        func downSamples(for group: KeyGroup, layer: VelocityLayer) -> [AVAudioPCMBuffer] {
+            if let exact = downLayers[group]?[layer], !exact.isEmpty { return exact }
+            if let medium = downLayers[group]?[.medium], !medium.isEmpty { return medium }
+            if let alpha = downLayers[.alpha]?[layer], !alpha.isEmpty { return alpha }
+            if let alphaMedium = downLayers[.alpha]?[.medium], !alphaMedium.isEmpty { return alphaMedium }
+            return []
+        }
+
+        func releasePool(for group: KeyGroup) -> [AVAudioPCMBuffer] {
+            if let exact = releaseSamples[group], !exact.isEmpty { return exact }
+            if let alpha = releaseSamples[.alpha], !alpha.isEmpty { return alpha }
+            return []
+        }
+    }
+
+    private var bank = SampleBank.empty
     private var customPackRoot: URL?
     private enum SampleGroup: Hashable {
-        case keyDown, keyUp
-        case spaceDown, spaceUp
-        case enterDown, enterUp
-        case backspaceDown, backspaceUp
+        case keyDown(KeyGroup, VelocityLayer)
+        case keyUp(KeyGroup)
     }
     private var lastSampleIndexByGroup: [SampleGroup: Int] = [:]
     private var lastOutputDeviceReinit: CFAbsoluteTime = 0
     private let scheduleLock = NSLock()
     private var estimatedPlaybackEndTime: CFAbsoluteTime = 0
     private var engineConfigObserver: NSObjectProtocol?
+    private var currentProfile: SoundProfile = .kalihBoxWhite
 
     init() {
         rebuildAudioGraph()
@@ -1328,6 +1504,7 @@ final class ClickSoundEngine {
     }
 
     func setProfile(_ profile: SoundProfile) {
+        currentProfile = profile
         switch profile {
         case .customPack:
             if let root = customPackRoot, installCustomPack(from: root) {
@@ -1348,54 +1525,74 @@ final class ClickSoundEngine {
                 backspaceUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_back.mp3"]
             )
         case .kalihBoxWhite:
-            bank = loadBank(
-                keyDown: [
-                    "Sounds/kalihboxwhite/kalihboxwhite-press_key1.mp3",
-                    "Sounds/kalihboxwhite/kalihboxwhite-press_key2.mp3",
-                    "Sounds/kalihboxwhite/kalihboxwhite-press_key3.mp3",
-                    "Sounds/kalihboxwhite/kalihboxwhite-press_key4.mp3",
-                    "Sounds/kalihboxwhite/kalihboxwhite-press_key5.mp3",
-                    "Sounds/kalihboxwhite/kalihboxwhite-press_key6.mp3",
-                    "Sounds/kalihboxwhite/kalihboxwhite-press_key7.mp3",
-                    "Sounds/kalihboxwhite/kalihboxwhite-press_key8.mp3",
-                    "Sounds/kalihboxwhite/kalihboxwhite-press_key9.mp3",
-                    "Sounds/kalihboxwhite/kalihboxwhite-press_key10.mp3"
-                ],
-                keyUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_key.mp3"],
-                spaceDown: ["Sounds/kalihboxwhite/kalihboxwhite-press_space.mp3"],
-                spaceUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_space.mp3"],
-                enterDown: ["Sounds/kalihboxwhite/kalihboxwhite-press_enter.mp3"],
-                enterUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_enter.mp3"],
-                backspaceDown: ["Sounds/kalihboxwhite/kalihboxwhite-press_back.mp3"],
-                backspaceUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_back.mp3"]
+            bank = loadBankFromManifest(
+                resourceDirectory: "Sounds/kalihboxwhite",
+                configFilename: "pack-kalihboxwhite.json"
             )
         case .mechvibesGateronBrownsRevolt:
-            bank = loadBankFromMechvibesConfig(
+            let manifest = loadBankFromManifest(
                 resourceDirectory: "Sounds/mv-gateron-browns-revolt",
-                configFilename: "config-gateron-browns-revolt.json"
+                configFilename: "pack-gateron-browns-revolt.json"
             )
+            if manifest.downLayers.isEmpty {
+                bank = loadBankFromMechvibesConfig(
+                    resourceDirectory: "Sounds/mv-gateron-browns-revolt",
+                    configFilename: "config-gateron-browns-revolt.json"
+                )
+            } else {
+                bank = manifest
+            }
         case .mechvibesHyperXAqua:
-            bank = loadBankFromMechvibesConfig(
+            let manifest = loadBankFromManifest(
                 resourceDirectory: "Sounds/mv-hyperx-aqua",
-                configFilename: "config-hyperx-aqua.json"
+                configFilename: "pack-hyperx-aqua.json"
             )
+            if manifest.downLayers.isEmpty {
+                bank = loadBankFromMechvibesConfig(
+                    resourceDirectory: "Sounds/mv-hyperx-aqua",
+                    configFilename: "config-hyperx-aqua.json"
+                )
+            } else {
+                bank = manifest
+            }
         case .mechvibesBoxJade:
-            bank = loadBankFromMechvibesConfig(
+            let manifest = loadBankFromManifest(
                 resourceDirectory: "Sounds/mv-boxjade",
-                configFilename: "config-boxjade.json"
+                configFilename: "pack-boxjade.json"
             )
+            if manifest.downLayers.isEmpty {
+                bank = loadBankFromMechvibesConfig(
+                    resourceDirectory: "Sounds/mv-boxjade",
+                    configFilename: "config-boxjade.json"
+                )
+            } else {
+                bank = manifest
+            }
         case .mechvibesOperaGX:
-            bank = loadBankFromMechvibesConfig(
+            let manifest = loadBankFromManifest(
                 resourceDirectory: "Sounds/mv-opera-gx",
-                configFilename: "config-opera-gx.json"
+                configFilename: "pack-opera-gx.json"
             )
+            if manifest.downLayers.isEmpty {
+                bank = loadBankFromMechvibesConfig(
+                    resourceDirectory: "Sounds/mv-opera-gx",
+                    configFilename: "config-opera-gx.json"
+                )
+            } else {
+                bank = manifest
+            }
         }
+    }
+
+    func reloadCurrentProfile() {
+        setProfile(currentProfile)
     }
 
     func installCustomPack(from root: URL) -> Bool {
         let resolvedRoot = Self.resolveRoot(for: root)
         let loaded = loadBankFromDirectory(resolvedRoot)
-        guard !loaded.keyDown.isEmpty else { return false }
+        guard !loaded.downSamples(for: .alpha, layer: .medium).isEmpty,
+              !loaded.downLayers.isEmpty else { return false }
         customPackRoot = resolvedRoot
         bank = loaded
         return true
@@ -1435,6 +1632,15 @@ final class ClickSoundEngine {
         NSLog("Audio engine graph rebuilt after output-device change")
     }
 
+    func setVelocityThresholds(slam: Double, hard: Double, medium: Double) {
+        let s = slam.clamped(to: 0.010 ... 0.120)
+        let h = max(s + 0.006, hard).clamped(to: 0.025 ... 0.180)
+        let m = max(h + 0.006, medium).clamped(to: 0.040 ... 0.260)
+        slamThreshold = s
+        hardThreshold = h
+        mediumThreshold = m
+    }
+
     private func rebuildAudioGraph() {
         if let engineConfigObserver {
             NotificationCenter.default.removeObserver(engineConfigObserver)
@@ -1465,25 +1671,16 @@ final class ClickSoundEngine {
     func playDown(for keyCode: Int, autorepeat: Bool) {
         guard engine.isRunning else { return }
 
-        let pool: [AVAudioPCMBuffer]
-        let group: SampleGroup
+        let keyGroup = resolveKeyGroup(for: keyCode)
         let keyLevel: Float
-        switch keyCode {
-        case 49:
-            pool = bank.spaceDown
-            group = .spaceDown
+        switch keyGroup {
+        case .space:
             keyLevel = spaceLevel
-        case 36, 76:
-            pool = bank.enterDown
-            group = .enterDown
+        case .enter:
             keyLevel = (pressLevel + spaceLevel) * 0.5
-        case 51, 117:
-            pool = bank.backspaceDown
-            group = .backspaceDown
+        case .delete:
             keyLevel = pressLevel * 0.95
         default:
-            pool = bank.keyDown
-            group = .keyDown
             keyLevel = pressLevel
         }
 
@@ -1493,10 +1690,17 @@ final class ClickSoundEngine {
         if autorepeat { gainJitter -= 0.1 }
         var gain = (masterVolume * keyLevel * dynamicCompensationGain * typingSpeedGain + gainJitter).clamped(to: 0.03 ... 16.0)
         var interrupt = false
+        let now = CFAbsoluteTimeGetCurrent()
+        let dt = lastDownHitTime == 0 ? 0.18 : now - lastDownHitTime
+        lastDownHitTime = now
+        let minGapSeconds = Double(minInterKeyGapMs.clamped(to: 0 ... 45)) / 1000.0
+        let isVeryFastChain = dt < minGapSeconds
+        let layer = resolveVelocityLayer(interKeyGap: dt, stackDensity: stackModeEnabled ? stackDensity : 0)
+        if lastReportedLayer != layer {
+            lastReportedLayer = layer
+            onVelocityLayerChanged?(layer.rawValue)
+        }
         if stackModeEnabled && !strictLevelingEnabled {
-            let now = CFAbsoluteTimeGetCurrent()
-            let dt = now - lastDownHitTime
-            lastDownHitTime = now
             let density = stackDensity.clamped(to: 0.0 ... 1.0)
             let proximity = Float(max(0.0, 1.0 - dt / 0.14))
             let stackBoost = 1.0 + (density * density) * proximity * 1.35
@@ -1505,7 +1709,15 @@ final class ClickSoundEngine {
             let interruptChance = ((density - 0.40) / 0.60).clamped(to: 0.0 ... 1.0) * proximity
             interrupt = Float.random(in: 0 ... 1) < interruptChance
         }
-        schedule(pickSample(from: pool, group: group), gain: gain, interruptIfNeeded: interrupt)
+        if isVeryFastChain {
+            let fastRatio = Float((minGapSeconds - dt) / max(0.001, minGapSeconds)).clamped(to: 0 ... 1)
+            let attenuation = 1.0 - fastRatio * 0.28
+            gain = (gain * attenuation).clamped(to: 0.03 ... 8.0)
+            interrupt = true
+        }
+        let pool = bank.downSamples(for: keyGroup, layer: layer)
+        let sampleGroup = SampleGroup.keyDown(keyGroup, layer)
+        schedule(pickSample(from: pool, group: sampleGroup), gain: gain, interruptIfNeeded: interrupt)
     }
 
     func playUp(for keyCode: Int) {
@@ -1521,32 +1733,34 @@ final class ClickSoundEngine {
                 return
             }
         }
-        let pool: [AVAudioPCMBuffer]
-        let group: SampleGroup
-        switch keyCode {
-        case 49:
-            pool = bank.spaceUp
-            group = .spaceUp
-        case 36, 76:
-            pool = bank.enterUp
-            group = .enterUp
-        case 51, 117:
-            pool = bank.backspaceUp
-            group = .backspaceUp
-        default:
-            pool = bank.keyUp
-            group = .keyUp
-        }
+        let keyGroup = resolveKeyGroup(for: keyCode)
+        let pool = bank.releasePool(for: keyGroup)
+        let group = SampleGroup.keyUp(keyGroup)
         let effectiveVariation = max(0.10, variation)
         let releaseJitterScale: Float = strictLevelingEnabled ? 0.02 : 0.16
         var gain = (masterVolume * releaseLevel * dynamicCompensationGain * typingSpeedGain + Float.random(in: -effectiveVariation ... effectiveVariation) * releaseJitterScale).clamped(to: 0.02 ... 8.0)
+        let now = CFAbsoluteTimeGetCurrent()
+        let dtFromLastDown = now - lastDownHitTime
+        let duckWindowSeconds = Double(releaseDuckingWindowMs.clamped(to: 20 ... 180)) / 1000.0
+        if duckWindowSeconds > 0 {
+            let proximity = Float(max(0, 1.0 - dtFromLastDown / duckWindowSeconds)).clamped(to: 0 ... 1)
+            let duckStrength = releaseDuckingStrength.clamped(to: 0 ... 1)
+            let ducked = 1.0 - proximity * duckStrength
+            gain = (gain * ducked).clamped(to: 0.005 ... 8.0)
+        }
         if stackModeEnabled && !strictLevelingEnabled {
             let tailCut = (1.0 - stackDensity * 0.78).clamped(to: 0.15 ... 1.0)
             gain = (gain * tailCut).clamped(to: 0.01 ... 1.1)
             gain = softKneeCompress(gain, kneeStart: 0.55, max: 0.85)
         }
+        let tailTightness = releaseTailTightness.clamped(to: 0 ... 1)
+        if tailTightness > 0 {
+            let tailScale = (1.0 - tailTightness * 0.42).clamped(to: 0.25 ... 1.0)
+            gain = (gain * tailScale).clamped(to: 0.005 ... 8.0)
+        }
         let releaseInterruptChance = ((stackDensity - 0.55) / 0.45).clamped(to: 0.0 ... 1.0) * 0.7
-        let interrupt = !strictLevelingEnabled && stackModeEnabled && Float.random(in: 0 ... 1) < releaseInterruptChance
+        let nearDownForInterrupt = dtFromLastDown < (duckWindowSeconds * 0.34)
+        let interrupt = (!strictLevelingEnabled && stackModeEnabled && Float.random(in: 0 ... 1) < releaseInterruptChance) || nearDownForInterrupt
         schedule(pickSample(from: pool, group: group), gain: gain, interruptIfNeeded: interrupt)
     }
 
@@ -1555,6 +1769,41 @@ final class ClickSoundEngine {
         let overflow = value - kneeStart
         let compressed = kneeStart + overflow * 0.35
         return min(compressed, max)
+    }
+
+    private func resolveKeyGroup(for keyCode: Int) -> KeyGroup {
+        switch keyCode {
+        case 49:
+            return .space
+        case 36, 76:
+            return .enter
+        case 51, 117:
+            return .delete
+        case 53, 122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90:
+            return .function
+        case 123, 124, 125, 126:
+            return .arrow
+        case 54, 55, 56, 57, 58, 59, 60, 61, 62:
+            return .modifier
+        default:
+            return .alpha
+        }
+    }
+
+    private func resolveVelocityLayer(interKeyGap: CFAbsoluteTime, stackDensity: Float) -> VelocityLayer {
+        let dt = max(0.0, interKeyGap)
+        let densityBias = Double(stackDensity.clamped(to: 0.0 ... 1.0)) * 0.018
+        let adjusted = max(0.0, dt - densityBias)
+        switch adjusted {
+        case ..<slamThreshold:
+            return .slam
+        case ..<hardThreshold:
+            return .hard
+        case ..<mediumThreshold:
+            return .medium
+        default:
+            return .soft
+        }
     }
 
     private func schedule(_ buffer: AVAudioPCMBuffer?, gain: Float, interruptIfNeeded: Bool) {
@@ -1648,22 +1897,36 @@ final class ClickSoundEngine {
         backspaceUp: [String]
     ) -> SampleBank {
         let variantCount = 2
-        let loaded = SampleBank(
-            keyDown: expandSamples(keyDown.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount),
-            keyUp: expandSamples(keyUp.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount),
-            spaceDown: expandSamples(spaceDown.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount),
-            spaceUp: expandSamples(spaceUp.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount),
-            enterDown: expandSamples(enterDown.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount),
-            enterUp: expandSamples(enterUp.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount),
-            backspaceDown: expandSamples(backspaceDown.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount),
-            backspaceUp: expandSamples(backspaceUp.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount)
-        )
+        let alphaDown = expandSamples(keyDown.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount)
+        let alphaUp = expandSamples(keyUp.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount)
+        let spaceDownPool = expandSamples(spaceDown.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount)
+        let spaceUpPool = expandSamples(spaceUp.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount)
+        let enterDownPool = expandSamples(enterDown.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount)
+        let enterUpPool = expandSamples(enterUp.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount)
+        let deleteDownPool = expandSamples(backspaceDown.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount)
+        let deleteUpPool = expandSamples(backspaceUp.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: variantCount)
 
-        guard !loaded.keyDown.isEmpty else {
+        guard !alphaDown.isEmpty else {
             NSLog("No keyboard sample files loaded for selected profile")
             return bank
         }
-        return loaded
+        var downLayers: [KeyGroup: [VelocityLayer: [AVAudioPCMBuffer]]] = [:]
+        for group in KeyGroup.allCases {
+            downLayers[group] = [.medium: alphaDown]
+        }
+        downLayers[.space] = [.medium: spaceDownPool.isEmpty ? alphaDown : spaceDownPool]
+        downLayers[.enter] = [.medium: enterDownPool.isEmpty ? alphaDown : enterDownPool]
+        downLayers[.delete] = [.medium: deleteDownPool.isEmpty ? alphaDown : deleteDownPool]
+
+        var releaseSamples: [KeyGroup: [AVAudioPCMBuffer]] = [:]
+        for group in KeyGroup.allCases {
+            releaseSamples[group] = alphaUp
+        }
+        if !spaceUpPool.isEmpty { releaseSamples[.space] = spaceUpPool }
+        if !enterUpPool.isEmpty { releaseSamples[.enter] = enterUpPool }
+        if !deleteUpPool.isEmpty { releaseSamples[.delete] = deleteUpPool }
+
+        return SampleBank(downLayers: downLayers, releaseSamples: releaseSamples)
     }
 
     private func loadBankFromDirectory(_ root: URL) -> SampleBank {
@@ -1678,17 +1941,17 @@ final class ClickSoundEngine {
             return matched
         }
 
-        let loaded = SampleBank(
-            keyDown: expandSamples(files(prefixes: ["key-down", "press-key", "keydown"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2),
-            keyUp: expandSamples(files(prefixes: ["key-up", "release-key", "keyup"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2),
-            spaceDown: expandSamples(files(prefixes: ["space-down", "press-space"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2),
-            spaceUp: expandSamples(files(prefixes: ["space-up", "release-space"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2),
-            enterDown: expandSamples(files(prefixes: ["enter-down", "press-enter"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2),
-            enterUp: expandSamples(files(prefixes: ["enter-up", "release-enter"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2),
-            backspaceDown: expandSamples(files(prefixes: ["backspace-down", "press-back"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2),
-            backspaceUp: expandSamples(files(prefixes: ["backspace-up", "release-back"]).compactMap(loadPCMBuffer(fileURL:)), variantsPerSample: 2)
+        let raw = loadBank(
+            keyDown: files(prefixes: ["key-down", "press-key", "keydown"]).map(\.path),
+            keyUp: files(prefixes: ["key-up", "release-key", "keyup"]).map(\.path),
+            spaceDown: files(prefixes: ["space-down", "press-space"]).map(\.path),
+            spaceUp: files(prefixes: ["space-up", "release-space"]).map(\.path),
+            enterDown: files(prefixes: ["enter-down", "press-enter"]).map(\.path),
+            enterUp: files(prefixes: ["enter-up", "release-enter"]).map(\.path),
+            backspaceDown: files(prefixes: ["backspace-down", "press-back"]).map(\.path),
+            backspaceUp: files(prefixes: ["backspace-up", "release-back"]).map(\.path)
         )
-        return loaded
+        return raw
     }
 
     private enum MechvibesDefineValue: Decodable {
@@ -1718,6 +1981,18 @@ final class ClickSoundEngine {
         let sound: String?
         let key_define_type: String?
         let defines: [String: MechvibesDefineValue]
+    }
+
+    private struct ManifestPack: Decodable {
+        struct ManifestGroup: Decodable {
+            let soft: [String]?
+            let medium: [String]?
+            let hard: [String]?
+            let slam: [String]?
+        }
+
+        let groups: [String: ManifestGroup]
+        let release: [String: [String]]?
     }
 
     private func loadBankFromMechvibesConfig(resourceDirectory: String, configFilename: String) -> SampleBank {
@@ -1780,28 +2055,128 @@ final class ClickSoundEngine {
         return boostedIfQuiet(raw)
     }
 
+    private func loadBankFromManifest(resourceDirectory: String, configFilename: String = "pack.json") -> SampleBank {
+        let configPath = "\(resourceDirectory)/\(configFilename)"
+        guard let configURL = resolveResourceURL(path: configPath) else {
+            NSLog("Missing manifest pack config: \(configPath)")
+            onManifestValidation?("Манифест не найден: \(configFilename)", ["missing file \(configPath)"])
+            return bank
+        }
+
+        let manifest: ManifestPack
+        do {
+            let data = try Data(contentsOf: configURL)
+            manifest = try JSONDecoder().decode(ManifestPack.self, from: data)
+        } catch {
+            NSLog("Failed to decode manifest pack \(configPath): \(error)")
+            onManifestValidation?("Ошибка чтения манифеста: \(configFilename)", ["\(error.localizedDescription)"])
+            return bank
+        }
+
+        var downLayers: [KeyGroup: [VelocityLayer: [AVAudioPCMBuffer]]] = [:]
+        var validationErrors: [String] = []
+
+        func validatedPaths(_ paths: [String], context: String) -> [String] {
+            var out: [String] = []
+            for rel in paths {
+                let resourcePath = "\(resourceDirectory)/\(rel)"
+                if resolveResourceURL(path: resourcePath) == nil {
+                    validationErrors.append("missing file '\(rel)' for \(context)")
+                    continue
+                }
+                out.append(resourcePath)
+            }
+            return out
+        }
+
+        for group in KeyGroup.allCases {
+            guard let source = manifest.groups[group.rawValue] else { continue }
+            var layers: [VelocityLayer: [AVAudioPCMBuffer]] = [:]
+            for layer in VelocityLayer.allCases {
+                let paths: [String]
+                switch layer {
+                case .soft: paths = source.soft ?? []
+                case .medium: paths = source.medium ?? []
+                case .hard: paths = source.hard ?? []
+                case .slam: paths = source.slam ?? []
+                }
+                let resolvedPaths = validatedPaths(paths, context: "\(group.rawValue).\(layer.rawValue)")
+                let loaded = expandSamples(resolvedPaths.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: 1)
+                if !loaded.isEmpty {
+                    layers[layer] = loaded
+                }
+            }
+            if !layers.isEmpty {
+                downLayers[group] = layers
+            }
+        }
+
+        var releaseSamples: [KeyGroup: [AVAudioPCMBuffer]] = [:]
+        if let release = manifest.release {
+            for group in KeyGroup.allCases {
+                guard let paths = release[group.rawValue] else { continue }
+                let resolvedPaths = validatedPaths(paths, context: "release.\(group.rawValue)")
+                let loaded = expandSamples(resolvedPaths.compactMap(loadPCMBuffer(resourcePath:)), variantsPerSample: 1)
+                if !loaded.isEmpty {
+                    releaseSamples[group] = loaded
+                }
+            }
+        }
+
+        if downLayers[.alpha] == nil {
+            validationErrors.append("missing group 'alpha'")
+        }
+        if downLayers[.space] == nil {
+            validationErrors.append("missing group 'space'")
+        }
+        if downLayers[.enter] == nil {
+            validationErrors.append("missing group 'enter'")
+        }
+        if downLayers[.delete] == nil {
+            validationErrors.append("missing group 'delete'")
+        }
+
+        if !validationErrors.isEmpty {
+            for issue in validationErrors {
+                NSLog("Manifest pack validation issue (\(configPath)): \(issue)")
+            }
+            onManifestValidation?("Манифест загружен с предупреждениями", validationErrors)
+        } else {
+            onManifestValidation?("Манифест OK: \(configFilename)", [])
+        }
+
+        let loaded = SampleBank(downLayers: downLayers, releaseSamples: releaseSamples)
+        guard !loaded.downSamples(for: .alpha, layer: .medium).isEmpty || !loaded.downLayers.isEmpty else {
+            NSLog("Manifest pack has no usable down samples: \(configPath)")
+            onManifestValidation?("Манифест пустой", ["no usable down samples in \(configFilename)"])
+            return bank
+        }
+        return boostedIfQuiet(loaded)
+    }
+
     private func boostedIfQuiet(_ bank: SampleBank) -> SampleBank {
         let measuredPeak = max(
-            peak(of: bank.keyDown),
-            peak(of: bank.spaceDown),
-            peak(of: bank.enterDown),
-            peak(of: bank.backspaceDown)
+            peak(of: bank.downLayers.values.flatMap { $0.values.flatMap { $0 } }),
+            peak(of: bank.releaseSamples.values.flatMap { $0 })
         )
         guard measuredPeak > 0 else { return bank }
         let targetPeak: Float = 0.78
         let gain = (targetPeak / measuredPeak).clamped(to: 1.0 ... 5.0)
         if gain <= 1.05 { return bank }
         NSLog("Boosting quiet sound pack by x\(String(format: "%.2f", gain)) (peak=\(String(format: "%.3f", measuredPeak)))")
-        return SampleBank(
-            keyDown: applyGain(bank.keyDown, gain: gain),
-            keyUp: applyGain(bank.keyUp, gain: gain),
-            spaceDown: applyGain(bank.spaceDown, gain: gain),
-            spaceUp: applyGain(bank.spaceUp, gain: gain),
-            enterDown: applyGain(bank.enterDown, gain: gain),
-            enterUp: applyGain(bank.enterUp, gain: gain),
-            backspaceDown: applyGain(bank.backspaceDown, gain: gain),
-            backspaceUp: applyGain(bank.backspaceUp, gain: gain)
-        )
+        var boostedDown: [KeyGroup: [VelocityLayer: [AVAudioPCMBuffer]]] = [:]
+        for (group, layers) in bank.downLayers {
+            var boostedLayers: [VelocityLayer: [AVAudioPCMBuffer]] = [:]
+            for (layer, buffers) in layers {
+                boostedLayers[layer] = applyGain(buffers, gain: gain)
+            }
+            boostedDown[group] = boostedLayers
+        }
+        var boostedRelease: [KeyGroup: [AVAudioPCMBuffer]] = [:]
+        for (group, buffers) in bank.releaseSamples {
+            boostedRelease[group] = applyGain(buffers, gain: gain)
+        }
+        return SampleBank(downLayers: boostedDown, releaseSamples: boostedRelease)
     }
 
     private func peak(of buffers: [AVAudioPCMBuffer]) -> Float {
@@ -1851,7 +2226,9 @@ final class ClickSoundEngine {
     }
 
     private func makeVariant(from base: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
-        let rateJitter = Double.random(in: -0.04 ... 0.04)
+        let amt = Double(pitchVariationAmount.clamped(to: 0 ... 0.6))
+        let jitter = 0.015 + amt * 0.06
+        let rateJitter = Double.random(in: -jitter ... jitter)
         let rate = max(0.9, min(1.1, 1.0 + rateJitter))
         let transient = Float.random(in: 0.92 ... 1.08)
         let tail = Float.random(in: 0.94 ... 1.04)
@@ -1883,6 +2260,9 @@ final class ClickSoundEngine {
     }
 
     private func loadPCMBuffer(resourcePath: String) -> AVAudioPCMBuffer? {
+        if resourcePath.hasPrefix("/") {
+            return loadPCMBuffer(fileURL: URL(fileURLWithPath: resourcePath))
+        }
         guard let url = resolveResourceURL(path: resourcePath) else {
             NSLog("Missing audio resource: \(resourcePath)")
             return nil

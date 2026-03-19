@@ -283,6 +283,7 @@ private struct AdvancedSettingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         sliderRow(title: "Громкость", value: $service.volume)
                         sliderRow(title: "Вариативность", value: $service.variation)
+                        sliderRow(title: "Pitch var", value: $service.pitchVariation, range: 0.0 ... 0.6)
                         sliderRow(title: "Нажатие", value: $service.pressLevel, range: 0.2 ... 1.6)
                         sliderRow(title: "Отпускание", value: $service.releaseLevel, range: 0.1 ... 1.4)
                         sliderRow(title: "Space/Enter", value: $service.spaceLevel, range: 0.2 ... 1.8)
@@ -330,6 +331,42 @@ private struct AdvancedSettingsView: View {
                         Text("Проигрывает два теста подряд: сначала OFF, затем ON.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                        HStack {
+                            Button("Пресет: Наушники") { service.applyHeadphonesPreset() }
+                                .buttonStyle(PrimaryGlassButtonStyle())
+                            Button("Пресет: Динамики") { service.applySpeakersPreset() }
+                                .buttonStyle(PrimaryGlassButtonStyle())
+                        }
+                    }
+                }
+
+                GlassCard(title: "Layers") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        layerSliderRow(title: "Slam", value: $service.layerThresholdSlam, range: 0.010 ... 0.120)
+                        layerSliderRow(title: "Hard", value: $service.layerThresholdHard, range: 0.025 ... 0.180)
+                        layerSliderRow(title: "Medium", value: $service.layerThresholdMedium, range: 0.040 ... 0.260)
+                        sliderRow(title: "Min gap", value: $service.minInterKeyGapMs, range: 0 ... 45, suffix: " ms", width: 64)
+                        sliderRow(title: "Duck release", value: $service.releaseDuckingStrength, range: 0 ... 1)
+                        sliderRow(title: "Duck window", value: $service.releaseDuckingWindowMs, range: 20 ... 180, suffix: " ms", width: 64)
+                        sliderRow(title: "Tail tight", value: $service.releaseTailTightness, range: 0 ... 1)
+                        Text("Live слой: \(service.liveVelocityLayer)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                GlassCard(title: "Пак звуков") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(service.manifestValidationSummary)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(service.manifestValidationIssues.isEmpty ? Color.green : Color.orange)
+                        if !service.manifestValidationIssues.isEmpty {
+                            ForEach(Array(service.manifestValidationIssues.prefix(4)), id: \.self) { issue in
+                                Text("• \(issue)")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 }
 
@@ -453,17 +490,38 @@ private struct AdvancedSettingsView: View {
         }
     }
 
-    private func sliderRow(title: String, value: Binding<Double>, range: ClosedRange<Double> = 0.0 ... 1.0) -> some View {
+    private func sliderRow(
+        title: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double> = 0.0 ... 1.0,
+        suffix: String = "%",
+        width: CGFloat = 52
+    ) -> some View {
+        let display = suffix == "%" ? Int(value.wrappedValue * 100) : Int(value.wrappedValue.rounded())
+        return HStack {
+            Text(title)
+                .foregroundStyle(.primary)
+                .frame(width: 110, alignment: .leading)
+            Slider(value: value, in: range)
+                .tint(.cyan)
+            Text("\(display)\(suffix)")
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+                .frame(width: width, alignment: .trailing)
+        }
+    }
+
+    private func layerSliderRow(title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
         HStack {
             Text(title)
                 .foregroundStyle(.primary)
                 .frame(width: 110, alignment: .leading)
             Slider(value: value, in: range)
                 .tint(.cyan)
-            Text("\(Int(value.wrappedValue * 100))%")
+            Text("\(Int((value.wrappedValue * 1000).rounded())) ms")
                 .monospacedDigit()
                 .foregroundStyle(.primary)
-                .frame(width: 52, alignment: .trailing)
+                .frame(width: 70, alignment: .trailing)
         }
     }
 
