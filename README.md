@@ -25,7 +25,7 @@
 - A/B сравнение (OFF/ON) для `Компенсация`, `Адаптация`, `Лимитер`, `Компенсация + Лимитер`.
 - Live-индикаторы коэффициентов компенсации и адаптации.
 - Тема интерфейса: `Системная / Светлая / Темная`.
-- Режим меню-бара с компактным popover.
+- Режим меню-бара с компактным popover + отдельное полноценное окно расширенных настроек.
 - Автозапуск при входе в систему.
 
 ## Функционал и примеры
@@ -51,6 +51,7 @@
 - `A/B сравнение`:
   - выбери функцию (`Компенсация`, `Адаптация`, `Лимитер`);
   - нажми `Сравнить OFF/ON` для двух последовательных тестов.
+- Открываются в отдельном ресайзабельном окне (`Klac — Настройки`), которое запоминает размер и позицию.
 
 ### Встроенные sound packs
 - `Kalih Box White`
@@ -107,6 +108,17 @@ tccutil reset ListenEvent com.klacapp.klac
 - Добавлена расширенная диагностика запуска захвата клавиатуры.
 - Улучшен `Stack-режим`: контраст между `0%` и `100%` стал заметно выше.
 
+## Что нового в 2.0.1
+- Шестеренка теперь открывает отдельное окно `Klac — Настройки` вместо popover.
+- Окно расширенных настроек стало ресайзабельным и удобнее для тонкой настройки звука.
+- Добавлены/доработаны секции `Layers` и anti-overlap микса:
+  - `Slam/Hard/Medium` пороги;
+  - `Min gap`, `Duck release`, `Duck window`, `Tail tight`;
+  - live-индикатор текущего слоя.
+- Добавлена явная валидация `pack.json` в UI (статус и предупреждения).
+- Добавлены пресеты микса `Наушники` / `Динамики`.
+- Добавлен легкий `Pitch var` для более живого тембра без грубых артефактов.
+
 ## Roadmap 2.0-alpha
 - [x] Layers UI: настраиваемые пороги `soft/medium/hard/slam` + live-индикатор слоя.
 - [x] Видимая в UI валидация `pack.json` (статус + список предупреждений).
@@ -159,7 +171,7 @@ SIGN_IDENTITY="Apple Development: YOUR_NAME (TEAMID)" ./scripts/build_app.sh --i
 ## Релизы в GitHub
 ```bash
 cd "/path/to/project"
-./scripts/release.sh v1.7.1
+./scripts/release.sh v2.0.1
 ```
 
 Что делает `release.sh`:
@@ -172,10 +184,10 @@ cd "/path/to/project"
 
 Полезные флаги:
 ```bash
-./scripts/release.sh v1.7.1 --dry-run
-./scripts/release.sh v1.7.1 --notes-file RELEASE_NOTES.md
-./scripts/release.sh v1.7.1 --skip-push
-./scripts/release.sh v1.7.1 --zip-only
+./scripts/release.sh v2.0.1 --dry-run
+./scripts/release.sh v2.0.1 --notes-file RELEASE_NOTES.md
+./scripts/release.sh v2.0.1 --skip-push
+./scripts/release.sh v2.0.1 --zip-only
 ```
 
 ## Лицензия
