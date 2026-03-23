@@ -450,6 +450,12 @@ private struct AdvancedSettingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(service.currentOutputDeviceName)
                             .foregroundStyle(.primary)
+                        Toggle("Автопресет по устройству", isOn: $service.autoOutputPresetEnabled)
+                            .tint(.cyan)
+                            .foregroundStyle(.primary)
+                        Text("Последний автопресет: \(service.autoOutputPresetLastApplied)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                         sliderRow(title: "Калибровка", value: $service.currentOutputDeviceBoost, range: 0.5 ... 2.0)
                         Text("Отдельно сохраняется для каждого аудиоустройства.")
                             .font(.footnote)

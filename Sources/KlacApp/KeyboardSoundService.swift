@@ -257,6 +257,10 @@ final class KeyboardSoundService: ObservableObject {
             updateDynamicCompensation()
         }
     }
+    @Published var autoOutputPresetEnabled = true {
+        didSet { defaults.set(autoOutputPresetEnabled, forKey: Keys.autoOutputPresetEnabled) }
+    }
+    @Published var autoOutputPresetLastApplied = "—"
     @Published var liveVelocityLayer = "medium"
     @Published var manifestValidationSummary = "Проверка пака не запускалась"
     @Published var manifestValidationIssues: [String] = []
@@ -276,6 +280,7 @@ final class KeyboardSoundService: ObservableObject {
     private var lastOutputDeviceID: AudioObjectID = 0
     private var outputDeviceBoosts: [String: Double] = [:]
     private var currentOutputDeviceUID = ""
+    private var lastAutoPresetDeviceUID = ""
     private var typingTimestamps: [CFAbsoluteTime] = []
     private var typingDecayTimer: Timer?
     private var personalBaselineCPS: Double = 3.0
@@ -314,6 +319,7 @@ final class KeyboardSoundService: ObservableObject {
         static let limiterEnabled = "settings.limiterEnabled"
         static let limiterDrive = "settings.limiterDrive"
         static let outputDeviceBoosts = "settings.outputDeviceBoosts"
+        static let autoOutputPresetEnabled = "settings.autoOutputPresetEnabled"
         static let appearanceMode = "settings.appearanceMode"
     }
 
@@ -418,6 +424,9 @@ final class KeyboardSoundService: ObservableObject {
         if let data = defaults.data(forKey: Keys.outputDeviceBoosts),
            let decoded = try? JSONDecoder().decode([String: Double].self, from: data) {
             outputDeviceBoosts = decoded
+        }
+        if defaults.object(forKey: Keys.autoOutputPresetEnabled) != nil {
+            autoOutputPresetEnabled = defaults.bool(forKey: Keys.autoOutputPresetEnabled)
         }
         if let modeRaw = defaults.string(forKey: Keys.appearanceMode),
            let mode = AppearanceMode(rawValue: modeRaw) {
@@ -900,6 +909,7 @@ final class KeyboardSoundService: ObservableObject {
                     self.currentOutputDeviceName = deviceName
                     self.currentOutputDeviceBoost = self.outputDeviceBoosts[deviceUID] ?? 1.0
                     self.soundEngine.handleOutputDeviceChanged()
+                    self.applyAutoOutputPresetIfNeeded(deviceUID: deviceUID, deviceName: deviceName)
                 }
 
                 // Some Bluetooth transitions keep the same device UID but momentarily
@@ -954,6 +964,39 @@ final class KeyboardSoundService: ObservableObject {
         let hard = max(slam + 0.006, layerThresholdHard).clamped(to: 0.025 ... 0.180)
         let medium = max(hard + 0.006, layerThresholdMedium).clamped(to: 0.040 ... 0.260)
         soundEngine.setVelocityThresholds(slam: slam, hard: hard, medium: medium)
+    }
+
+    private func applyAutoOutputPresetIfNeeded(deviceUID: String, deviceName: String) {
+        guard autoOutputPresetEnabled else { return }
+        guard !deviceUID.isEmpty else { return }
+        guard deviceUID != lastAutoPresetDeviceUID else { return }
+        lastAutoPresetDeviceUID = deviceUID
+
+        if Self.looksLikeHeadphones(deviceName) {
+            applyHeadphonesPreset()
+            autoOutputPresetLastApplied = "Наушники"
+        } else {
+            applySpeakersPreset()
+            autoOutputPresetLastApplied = "Динамики"
+        }
+        NSLog("Auto output preset applied: \(autoOutputPresetLastApplied) for \(deviceName)")
+    }
+
+    nonisolated private static func looksLikeHeadphones(_ name: String) -> Bool {
+        let n = name.lowercased()
+        let headphoneTokens = [
+            "headphone", "headphones", "airpods", "earbuds", "buds",
+            "nothing", "beats", "sony", "bose", "jbl", "wh-", "wf-",
+            "bt", "bluetooth", "науш"
+        ]
+        if headphoneTokens.contains(where: { n.contains($0) }) {
+            return true
+        }
+        let speakerTokens = ["speaker", "speakers", "динам", "built-in", "macbook"]
+        if speakerTokens.contains(where: { n.contains($0) }) {
+            return false
+        }
+        return false
     }
 
     func autoInverseGainPreview(systemVolumePercent: Double) -> Double {

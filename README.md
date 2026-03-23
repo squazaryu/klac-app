@@ -119,6 +119,13 @@ tccutil reset ListenEvent com.klacapp.klac
 - Добавлены пресеты микса `Наушники` / `Динамики`.
 - Добавлен легкий `Pitch var` для более живого тембра без грубых артефактов.
 
+## Что нового в 2.0.2
+- Добавлен `Автопресет по устройству вывода` в разделе `Устройство вывода`.
+- При смене аудиоустройства автоматически применяется пресет:
+  - `Наушники` для Bluetooth/Headphones-подобных устройств;
+  - `Динамики` для встроенного/обычного speaker-вывода.
+- Добавлен индикатор `Последний автопресет` для быстрой проверки переключения.
+
 ## Roadmap 2.0-alpha
 - [x] Layers UI: настраиваемые пороги `soft/medium/hard/slam` + live-индикатор слоя.
 - [x] Видимая в UI валидация `pack.json` (статус + список предупреждений).
@@ -171,7 +178,7 @@ SIGN_IDENTITY="Apple Development: YOUR_NAME (TEAMID)" ./scripts/build_app.sh --i
 ## Релизы в GitHub
 ```bash
 cd "/path/to/project"
-./scripts/release.sh v2.0.1
+./scripts/release.sh v2.0.2
 ```
 
 Что делает `release.sh`:
@@ -184,10 +191,10 @@ cd "/path/to/project"
 
 Полезные флаги:
 ```bash
-./scripts/release.sh v2.0.1 --dry-run
-./scripts/release.sh v2.0.1 --notes-file RELEASE_NOTES.md
-./scripts/release.sh v2.0.1 --skip-push
-./scripts/release.sh v2.0.1 --zip-only
+./scripts/release.sh v2.0.2 --dry-run
+./scripts/release.sh v2.0.2 --notes-file RELEASE_NOTES.md
+./scripts/release.sh v2.0.2 --skip-push
+./scripts/release.sh v2.0.2 --zip-only
 ```
 
 ## Лицензия
