@@ -92,9 +92,16 @@ final class KeyboardSoundService: ObservableObject {
     @Published var selectedProfile: SoundProfile = .kalihBoxWhite {
         didSet {
             soundEngine.setProfile(selectedProfile)
+            if autoProfileTuningEnabled {
+                applyProfileSoundPreset(for: selectedProfile)
+            }
             defaults.set(selectedProfile.rawValue, forKey: Keys.selectedProfile)
         }
     }
+    @Published var autoProfileTuningEnabled = true {
+        didSet { defaults.set(autoProfileTuningEnabled, forKey: Keys.autoProfileTuningEnabled) }
+    }
+    @Published var profilePresetLastApplied = "—"
     @Published var launchAtLogin = false {
         didSet {
             defaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
@@ -295,6 +302,7 @@ final class KeyboardSoundService: ObservableObject {
         static let releaseLevel = "settings.releaseLevel"
         static let spaceLevel = "settings.spaceLevel"
         static let selectedProfile = "settings.selectedProfile"
+        static let autoProfileTuningEnabled = "settings.autoProfileTuningEnabled"
         static let launchAtLogin = "settings.launchAtLogin"
         static let dynamicCompensationEnabled = "settings.dynamicCompensationEnabled"
         static let compensationStrength = "settings.compensationStrength"
@@ -351,6 +359,9 @@ final class KeyboardSoundService: ObservableObject {
         if let profileRaw = defaults.string(forKey: Keys.selectedProfile),
            let profile = SoundProfile(rawValue: profileRaw) {
             selectedProfile = profile
+        }
+        if defaults.object(forKey: Keys.autoProfileTuningEnabled) != nil {
+            autoProfileTuningEnabled = defaults.bool(forKey: Keys.autoProfileTuningEnabled)
         }
         if defaults.object(forKey: Keys.launchAtLogin) != nil {
             launchAtLogin = defaults.bool(forKey: Keys.launchAtLogin)
@@ -697,6 +708,57 @@ final class KeyboardSoundService: ObservableObject {
         releaseDuckingStrength = 0.64
         releaseDuckingWindowMs = 88
         releaseTailTightness = 0.40
+    }
+
+    private func applyProfileSoundPreset(for profile: SoundProfile) {
+        switch profile {
+        case .mechvibesCherryMXBlackABS:
+            variation = 0.24
+            pitchVariation = 0.12
+            pressLevel = 0.78
+            releaseLevel = 0.42
+            spaceLevel = 0.82
+            minInterKeyGapMs = 12
+            releaseDuckingStrength = 0.68
+            releaseDuckingWindowMs = 82
+            releaseTailTightness = 0.45
+            profilePresetLastApplied = "ABS: плотный и сухой"
+        case .mechvibesCherryMXBlackPBT:
+            variation = 0.30
+            pitchVariation = 0.16
+            pressLevel = 0.82
+            releaseLevel = 0.46
+            spaceLevel = 0.84
+            minInterKeyGapMs = 13
+            releaseDuckingStrength = 0.70
+            releaseDuckingWindowMs = 86
+            releaseTailTightness = 0.48
+            profilePresetLastApplied = "PBT: чуть ярче атака"
+        case .mechvibesEGCrystalPurple:
+            variation = 0.38
+            pitchVariation = 0.25
+            pressLevel = 0.86
+            releaseLevel = 0.52
+            spaceLevel = 0.90
+            minInterKeyGapMs = 15
+            releaseDuckingStrength = 0.76
+            releaseDuckingWindowMs = 98
+            releaseTailTightness = 0.55
+            profilePresetLastApplied = "Crystal Purple: живой и звонкий"
+        case .mechvibesEGOreo:
+            variation = 0.28
+            pitchVariation = 0.18
+            pressLevel = 0.80
+            releaseLevel = 0.44
+            spaceLevel = 0.85
+            minInterKeyGapMs = 14
+            releaseDuckingStrength = 0.72
+            releaseDuckingWindowMs = 92
+            releaseTailTightness = 0.50
+            profilePresetLastApplied = "Oreo: мягче и глубже"
+        default:
+            profilePresetLastApplied = "Базовый пресет"
+        }
     }
 
     func playABComparison() {
@@ -1437,6 +1499,10 @@ enum SoundProfile: String, CaseIterable, Identifiable {
     case mechvibesHyperXAqua
     case mechvibesBoxJade
     case mechvibesOperaGX
+    case mechvibesCherryMXBlackABS
+    case mechvibesCherryMXBlackPBT
+    case mechvibesEGCrystalPurple
+    case mechvibesEGOreo
 
     var id: String { rawValue }
 
@@ -1448,6 +1514,10 @@ enum SoundProfile: String, CaseIterable, Identifiable {
         case .mechvibesHyperXAqua: return "Mechvibes: HyperX Aqua"
         case .mechvibesBoxJade: return "Mechvibes: Box Jade"
         case .mechvibesOperaGX: return "Mechvibes: Opera GX"
+        case .mechvibesCherryMXBlackABS: return "Mechvibes: CherryMX Black - ABS"
+        case .mechvibesCherryMXBlackPBT: return "Mechvibes: CherryMX Black - PBT"
+        case .mechvibesEGCrystalPurple: return "Mechvibes: EG Crystal Purple"
+        case .mechvibesEGOreo: return "Mechvibes: EG Oreo"
         }
     }
 }
@@ -1624,6 +1694,26 @@ final class ClickSoundEngine {
             } else {
                 bank = manifest
             }
+        case .mechvibesCherryMXBlackABS:
+            bank = loadBankFromMechvibesConfig(
+                resourceDirectory: "Sounds/mv-cherrymx-black-abs",
+                configFilename: "config-cherrymx-black-abs.json"
+            )
+        case .mechvibesCherryMXBlackPBT:
+            bank = loadBankFromMechvibesConfig(
+                resourceDirectory: "Sounds/mv-cherrymx-black-pbt",
+                configFilename: "config-cherrymx-black-pbt.json"
+            )
+        case .mechvibesEGCrystalPurple:
+            bank = loadBankFromMechvibesConfig(
+                resourceDirectory: "Sounds/mv-eg-crystal-purple",
+                configFilename: "config-eg-crystal-purple.json"
+            )
+        case .mechvibesEGOreo:
+            bank = loadBankFromMechvibesConfig(
+                resourceDirectory: "Sounds/mv-eg-oreo",
+                configFilename: "config-eg-oreo.json"
+            )
         }
     }
 
@@ -2062,6 +2152,63 @@ final class ClickSoundEngine {
             return nil
         }
 
+        func spriteSlice(for keyCode: Int) -> (startMs: Double, durationMs: Double)? {
+            guard let value = config.defines[String(keyCode)] else { return nil }
+            if case let .sprite(bounds) = value, bounds.count >= 2 {
+                return (startMs: bounds[0], durationMs: bounds[1])
+            }
+            return nil
+        }
+
+        if !isMulti, let sound = config.sound, !sound.isEmpty {
+            let fullPath = "\(resourceDirectory)/\(sound)"
+            if let base = loadPCMBuffer(resourcePath: fullPath) {
+                let allSlices = config.defines.compactMap { pair -> AVAudioPCMBuffer? in
+                    guard let key = Int(pair.key) else { return nil }
+                    guard let (startMs, durationMs) = spriteSlice(for: key) else { return nil }
+                    return slicePCMBuffer(base, startMs: startMs, durationMs: durationMs)
+                }
+                if !allSlices.isEmpty {
+                    func slices(for codes: [Int]) -> [AVAudioPCMBuffer] {
+                        let selected = codes.compactMap { code -> AVAudioPCMBuffer? in
+                            guard let (startMs, durationMs) = spriteSlice(for: code) else { return nil }
+                            return slicePCMBuffer(base, startMs: startMs, durationMs: durationMs)
+                        }
+                        if !selected.isEmpty { return selected }
+                        return Array(allSlices.prefix(8))
+                    }
+
+                    let alphaCodes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+                    let spaceCodes = [49]
+                    let enterCodes = [36, 76, 28]
+                    let deleteCodes = [51, 117, 14]
+
+                    let alphaDown = expandSamples(slices(for: alphaCodes), variantsPerSample: 1)
+                    let spaceDown = expandSamples(slices(for: spaceCodes), variantsPerSample: 1)
+                    let enterDown = expandSamples(slices(for: enterCodes), variantsPerSample: 1)
+                    let deleteDown = expandSamples(slices(for: deleteCodes), variantsPerSample: 1)
+
+                    var downLayers: [KeyGroup: [VelocityLayer: [AVAudioPCMBuffer]]] = [:]
+                    for group in KeyGroup.allCases {
+                        downLayers[group] = [.medium: alphaDown]
+                    }
+                    if !spaceDown.isEmpty { downLayers[.space] = [.medium: spaceDown] }
+                    if !enterDown.isEmpty { downLayers[.enter] = [.medium: enterDown] }
+                    if !deleteDown.isEmpty { downLayers[.delete] = [.medium: deleteDown] }
+
+                    var release: [KeyGroup: [AVAudioPCMBuffer]] = [:]
+                    for group in KeyGroup.allCases {
+                        release[group] = alphaDown
+                    }
+                    if !spaceDown.isEmpty { release[.space] = spaceDown }
+                    if !enterDown.isEmpty { release[.enter] = enterDown }
+                    if !deleteDown.isEmpty { release[.delete] = deleteDown }
+
+                    return boostedIfQuiet(SampleBank(downLayers: downLayers, releaseSamples: release))
+                }
+            }
+        }
+
         var keyDownFiles: [String] = []
         if isMulti {
             let allFiles = config.defines.values.compactMap { value -> String? in
@@ -2096,6 +2243,25 @@ final class ClickSoundEngine {
             backspaceUp: prefixed(backspaceFile)
         )
         return boostedIfQuiet(raw)
+    }
+
+    private func slicePCMBuffer(_ base: AVAudioPCMBuffer, startMs: Double, durationMs: Double) -> AVAudioPCMBuffer? {
+        let sr = base.format.sampleRate
+        let startFrame = max(0, Int((startMs / 1000.0) * sr))
+        let frameCount = max(1, Int((durationMs / 1000.0) * sr))
+        let totalFrames = Int(base.frameLength)
+        guard startFrame < totalFrames else { return nil }
+        let available = max(1, min(frameCount, totalFrames - startFrame))
+        guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(available)) else { return nil }
+        out.frameLength = AVAudioFrameCount(available)
+        let channels = Int(format.channelCount)
+        for ch in 0 ..< channels {
+            guard let src = base.floatChannelData?[ch], let dst = out.floatChannelData?[ch] else { continue }
+            for i in 0 ..< available {
+                dst[i] = src[startFrame + i]
+            }
+        }
+        return out
     }
 
     private func loadBankFromManifest(resourceDirectory: String, configFilename: String = "pack.json") -> SampleBank {

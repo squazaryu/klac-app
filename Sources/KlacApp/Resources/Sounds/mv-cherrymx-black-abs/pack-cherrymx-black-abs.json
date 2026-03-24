@@ -1,0 +1,16 @@
+{
+  "groups": {
+    "alpha": {"soft": ["cherrymx-black-abs.wav"], "medium": ["cherrymx-black-abs.wav"], "hard": ["cherrymx-black-abs.wav"], "slam": ["cherrymx-black-abs.wav"]},
+    "modifier": {"soft": ["cherrymx-black-abs.wav"], "medium": ["cherrymx-black-abs.wav"], "hard": ["cherrymx-black-abs.wav"], "slam": ["cherrymx-black-abs.wav"]},
+    "function": {"soft": ["cherrymx-black-abs.wav"], "medium": ["cherrymx-black-abs.wav"], "hard": ["cherrymx-black-abs.wav"], "slam": ["cherrymx-black-abs.wav"]},
+    "arrow": {"soft": ["cherrymx-black-abs.wav"], "medium": ["cherrymx-black-abs.wav"], "hard": ["cherrymx-black-abs.wav"], "slam": ["cherrymx-black-abs.wav"]},
+    "space": {"soft": ["cherrymx-black-abs.wav"], "medium": ["cherrymx-black-abs.wav"], "hard": ["cherrymx-black-abs.wav"], "slam": ["cherrymx-black-abs.wav"]},
+    "enter": {"soft": ["cherrymx-black-abs.wav"], "medium": ["cherrymx-black-abs.wav"], "hard": ["cherrymx-black-abs.wav"], "slam": ["cherrymx-black-abs.wav"]},
+    "delete": {"soft": ["cherrymx-black-abs.wav"], "medium": ["cherrymx-black-abs.wav"], "hard": ["cherrymx-black-abs.wav"], "slam": ["cherrymx-black-abs.wav"]},
+    "other": {"soft": ["cherrymx-black-abs.wav"], "medium": ["cherrymx-black-abs.wav"], "hard": ["cherrymx-black-abs.wav"], "slam": ["cherrymx-black-abs.wav"]}
+  },
+  "release": {
+    "alpha": ["cherrymx-black-abs.wav"], "modifier": ["cherrymx-black-abs.wav"], "function": ["cherrymx-black-abs.wav"], "arrow": ["cherrymx-black-abs.wav"],
+    "space": ["cherrymx-black-abs.wav"], "enter": ["cherrymx-black-abs.wav"], "delete": ["cherrymx-black-abs.wav"], "other": ["cherrymx-black-abs.wav"]
+  }
+}

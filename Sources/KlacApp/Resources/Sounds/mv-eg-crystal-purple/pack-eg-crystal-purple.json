@@ -1,0 +1,16 @@
+{
+  "groups": {
+    "alpha": {"soft": ["purple.wav"], "medium": ["purple.wav"], "hard": ["purple.wav"], "slam": ["purple.wav"]},
+    "modifier": {"soft": ["purple.wav"], "medium": ["purple.wav"], "hard": ["purple.wav"], "slam": ["purple.wav"]},
+    "function": {"soft": ["purple.wav"], "medium": ["purple.wav"], "hard": ["purple.wav"], "slam": ["purple.wav"]},
+    "arrow": {"soft": ["purple.wav"], "medium": ["purple.wav"], "hard": ["purple.wav"], "slam": ["purple.wav"]},
+    "space": {"soft": ["purple.wav"], "medium": ["purple.wav"], "hard": ["purple.wav"], "slam": ["purple.wav"]},
+    "enter": {"soft": ["purple.wav"], "medium": ["purple.wav"], "hard": ["purple.wav"], "slam": ["purple.wav"]},
+    "delete": {"soft": ["purple.wav"], "medium": ["purple.wav"], "hard": ["purple.wav"], "slam": ["purple.wav"]},
+    "other": {"soft": ["purple.wav"], "medium": ["purple.wav"], "hard": ["purple.wav"], "slam": ["purple.wav"]}
+  },
+  "release": {
+    "alpha": ["purple.wav"], "modifier": ["purple.wav"], "function": ["purple.wav"], "arrow": ["purple.wav"],
+    "space": ["purple.wav"], "enter": ["purple.wav"], "delete": ["purple.wav"], "other": ["purple.wav"]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "groups": {
+    "alpha": {"soft": ["oreo.wav"], "medium": ["oreo.wav"], "hard": ["oreo.wav"], "slam": ["oreo.wav"]},
+    "modifier": {"soft": ["oreo.wav"], "medium": ["oreo.wav"], "hard": ["oreo.wav"], "slam": ["oreo.wav"]},
+    "function": {"soft": ["oreo.wav"], "medium": ["oreo.wav"], "hard": ["oreo.wav"], "slam": ["oreo.wav"]},
+    "arrow": {"soft": ["oreo.wav"], "medium": ["oreo.wav"], "hard": ["oreo.wav"], "slam": ["oreo.wav"]},
+    "space": {"soft": ["oreo.wav"], "medium": ["oreo.wav"], "hard": ["oreo.wav"], "slam": ["oreo.wav"]},
+    "enter": {"soft": ["oreo.wav"], "medium": ["oreo.wav"], "hard": ["oreo.wav"], "slam": ["oreo.wav"]},
+    "delete": {"soft": ["oreo.wav"], "medium": ["oreo.wav"], "hard": ["oreo.wav"], "slam": ["oreo.wav"]},
+    "other": {"soft": ["oreo.wav"], "medium": ["oreo.wav"], "hard": ["oreo.wav"], "slam": ["oreo.wav"]}
+  },
+  "release": {
+    "alpha": ["oreo.wav"], "modifier": ["oreo.wav"], "function": ["oreo.wav"], "arrow": ["oreo.wav"],
+    "space": ["oreo.wav"], "enter": ["oreo.wav"], "delete": ["oreo.wav"], "other": ["oreo.wav"]
+  }
+}
