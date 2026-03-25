@@ -16,11 +16,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 final class StatusBarController: NSObject {
     private let statusItem: NSStatusItem
     private let popover: NSPopover
+    private let hostingController: NSHostingController<AnyView>
     private var eventMonitor: Any?
 
     init(service: KeyboardSoundService) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         popover = NSPopover()
+        let rootView = AnyView(ContentView().environmentObject(service))
+        hostingController = NSHostingController(rootView: rootView)
         super.init()
 
         if let button = statusItem.button {
@@ -34,12 +37,9 @@ final class StatusBarController: NSObject {
             NSLog("Failed to create status bar button")
         }
 
-        let view = ContentView()
-            .environmentObject(service)
-            .frame(width: 300, height: 236)
-
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: view)
+        popover.contentViewController = hostingController
+        refreshPopoverSize()
     }
 
     @objc private func togglePopover(_ sender: AnyObject?) {
@@ -48,9 +48,21 @@ final class StatusBarController: NSObject {
             stopMonitoring()
         } else {
             guard let button = statusItem.button else { return }
+            refreshPopoverSize()
+            NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover.contentViewController?.view.window?.makeKey()
+            popover.contentViewController?.view.window?.makeMain()
             startMonitoring()
         }
+    }
+
+    private func refreshPopoverSize() {
+        guard let contentView = popover.contentViewController?.view else { return }
+        contentView.layoutSubtreeIfNeeded()
+        let fitting = contentView.fittingSize
+        guard fitting.width > 0, fitting.height > 0 else { return }
+        popover.contentSize = NSSize(width: ceil(fitting.width), height: ceil(fitting.height))
     }
 
     private func startMonitoring() {

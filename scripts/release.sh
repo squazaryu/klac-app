@@ -7,10 +7,11 @@ cd "$ROOT_DIR"
 usage() {
   cat <<USAGE
 Usage:
-  ./scripts/release.sh v1.7.1 [--notes-file path] [--dry-run] [--skip-push] [--zip-only]
+  ./scripts/release.sh v1.7.1[-suffix] [--notes-file path] [--dry-run] [--skip-push] [--zip-only]
 
 Examples:
   ./scripts/release.sh v1.7.1
+  ./scripts/release.sh v2.0.4-fix.1
   ./scripts/release.sh v1.7.1 --notes-file RELEASE_NOTES.md
   ./scripts/release.sh v1.7.1 --dry-run
   ./scripts/release.sh v1.7.1 --zip-only
@@ -60,12 +61,12 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$VERSION" ]; then
-  echo "Error: version is required (format: vX.Y.Z)"
+  echo "Error: version is required (format: vX.Y.Z or vX.Y.Z-suffix)"
   exit 1
 fi
 
-if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "Error: version must match vX.Y.Z"
+if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]; then
+  echo "Error: version must match vX.Y.Z or vX.Y.Z-suffix"
   exit 1
 fi
 

@@ -42,6 +42,22 @@ final class KeyboardSoundService: ObservableObject {
         }
     }
 
+    enum OutputPresetMode: String, CaseIterable, Identifiable {
+        case auto
+        case headphones
+        case speakers
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .auto: return "Авто"
+            case .headphones: return "Наушники"
+            case .speakers: return "Динамики"
+            }
+        }
+    }
+
     @Published var isEnabled = true {
         didSet { defaults.set(isEnabled, forKey: Keys.isEnabled) }
     }
@@ -267,7 +283,25 @@ final class KeyboardSoundService: ObservableObject {
     @Published var autoOutputPresetEnabled = true {
         didSet { defaults.set(autoOutputPresetEnabled, forKey: Keys.autoOutputPresetEnabled) }
     }
+    @Published var perDeviceSoundProfileEnabled = true {
+        didSet { defaults.set(perDeviceSoundProfileEnabled, forKey: Keys.perDeviceSoundProfileEnabled) }
+    }
+    @Published var currentOutputPresetMode: OutputPresetMode = .auto {
+        didSet {
+            guard autoOutputPresetEnabled else { return }
+            switch currentOutputPresetMode {
+            case .auto:
+                applyAutoOutputPresetIfNeeded(deviceUID: currentOutputDeviceUID, deviceName: currentOutputDeviceName)
+            case .headphones:
+                applyHeadphonesPreset()
+            case .speakers:
+                applySpeakersPreset()
+            }
+        }
+    }
     @Published var autoOutputPresetLastApplied = "—"
+    @Published var updateCheckInProgress = false
+    @Published var updateStatusText = "—"
     @Published var liveVelocityLayer = "medium"
     @Published var manifestValidationSummary = "Проверка пака не запускалась"
     @Published var manifestValidationIssues: [String] = []
@@ -279,6 +313,8 @@ final class KeyboardSoundService: ObservableObject {
     private let eventTap = GlobalKeyEventTap()
     @Published var capturingKeyboard = false
     private let defaults = UserDefaults.standard
+    private let updateRepoOwner = "squazaryu"
+    private let updateRepoName = "klac-app"
     private var systemVolumeTimer: Timer?
     private var systemMonitorInterval: TimeInterval = 0
     private var lastSystemVolume: Double = 1.0
@@ -328,6 +364,7 @@ final class KeyboardSoundService: ObservableObject {
         static let limiterDrive = "settings.limiterDrive"
         static let outputDeviceBoosts = "settings.outputDeviceBoosts"
         static let autoOutputPresetEnabled = "settings.autoOutputPresetEnabled"
+        static let perDeviceSoundProfileEnabled = "settings.perDeviceSoundProfileEnabled"
         static let appearanceMode = "settings.appearanceMode"
     }
 
@@ -438,6 +475,9 @@ final class KeyboardSoundService: ObservableObject {
         }
         if defaults.object(forKey: Keys.autoOutputPresetEnabled) != nil {
             autoOutputPresetEnabled = defaults.bool(forKey: Keys.autoOutputPresetEnabled)
+        }
+        if defaults.object(forKey: Keys.perDeviceSoundProfileEnabled) != nil {
+            perDeviceSoundProfileEnabled = defaults.bool(forKey: Keys.perDeviceSoundProfileEnabled)
         }
         if let modeRaw = defaults.string(forKey: Keys.appearanceMode),
            let mode = AppearanceMode(rawValue: modeRaw) {
@@ -594,6 +634,267 @@ final class KeyboardSoundService: ObservableObject {
         } else {
             accessActionHint = "Не удалось автоматом перезапустить dev-сборку. Закрой приложение и запусти снова через swift run."
         }
+    }
+
+    func checkForUpdatesInteractive() {
+        guard !updateCheckInProgress else { return }
+        updateCheckInProgress = true
+        updateStatusText = "Проверка..."
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.updateCheckInProgress = false }
+
+            do {
+                let release = try await self.fetchLatestRelease()
+                let currentVersion = self.currentAppVersion()
+                let currentBuild = self.currentAppBuildNumber()
+                let latestVersion = self.normalizedVersion(fromTag: release.tag_name)
+
+                guard self.isVersion(latestVersion, newerThan: currentVersion, currentBuild: currentBuild) else {
+                    self.updateStatusText = "У вас актуальная версия (\(currentVersion))."
+                    self.presentInfoAlert(
+                        title: "Обновлений нет",
+                        message: "Текущая версия \(currentVersion) уже актуальна."
+                    )
+                    return
+                }
+
+                guard let zipAsset = release.assets.first(where: { $0.name.lowercased().hasSuffix(".zip") }),
+                      let zipURL = URL(string: zipAsset.browser_download_url) else {
+                    self.updateStatusText = "В релизе нет zip-артефакта."
+                    self.presentInfoAlert(
+                        title: "Обновление недоступно",
+                        message: "Новая версия \(latestVersion) найдена, но zip-файл не найден в assets."
+                    )
+                    return
+                }
+
+                let shouldInstall = self.presentUpdatePrompt(
+                    currentVersion: currentVersion,
+                    latestVersion: latestVersion
+                )
+                guard shouldInstall else {
+                    self.updateStatusText = "Обновление отложено."
+                    return
+                }
+
+                self.updateStatusText = "Загрузка \(latestVersion)..."
+                let downloaded = try await self.downloadFile(from: zipURL)
+
+                self.updateStatusText = "Установка \(latestVersion)..."
+                try self.installUpdateFromZip(downloaded, version: latestVersion)
+                self.updateStatusText = "Установка запущена..."
+            } catch {
+                self.updateStatusText = "Ошибка обновления: \(error.localizedDescription)"
+                self.presentInfoAlert(
+                    title: "Ошибка обновления",
+                    message: error.localizedDescription
+                )
+            }
+        }
+    }
+
+    private struct GitHubRelease: Decodable {
+        struct Asset: Decodable {
+            let name: String
+            let browser_download_url: String
+        }
+        let tag_name: String
+        let assets: [Asset]
+    }
+
+    private func fetchLatestRelease() async throws -> GitHubRelease {
+        let endpoint = "https://api.github.com/repos/\(updateRepoOwner)/\(updateRepoName)/releases/latest"
+        guard let url = URL(string: endpoint) else {
+            throw NSError(domain: "KlacUpdate", code: 1001, userInfo: [NSLocalizedDescriptionKey: "Некорректный URL обновлений"])
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("KlacAppUpdater", forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
+            throw NSError(domain: "KlacUpdate", code: 1002, userInfo: [NSLocalizedDescriptionKey: "GitHub API вернул ошибку"])
+        }
+        return try JSONDecoder().decode(GitHubRelease.self, from: data)
+    }
+
+    private func downloadFile(from url: URL) async throws -> URL {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 120
+        request.setValue("KlacAppUpdater", forHTTPHeaderField: "User-Agent")
+        let (tempURL, response) = try await URLSession.shared.download(for: request)
+        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
+            throw NSError(domain: "KlacUpdate", code: 1003, userInfo: [NSLocalizedDescriptionKey: "Не удалось скачать архив обновления"])
+        }
+        return tempURL
+    }
+
+    private func installUpdateFromZip(_ zipTempURL: URL, version: String) throws {
+        let fm = FileManager.default
+        let workDir = fm.temporaryDirectory.appendingPathComponent("klac-update-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
+
+        let zipURL = workDir.appendingPathComponent("update.zip")
+        if fm.fileExists(atPath: zipURL.path) { try fm.removeItem(at: zipURL) }
+        try fm.moveItem(at: zipTempURL, to: zipURL)
+
+        let unpackDir = workDir.appendingPathComponent("unpacked", isDirectory: true)
+        try fm.createDirectory(at: unpackDir, withIntermediateDirectories: true)
+
+        let unzip = Process()
+        unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        unzip.arguments = ["-x", "-k", zipURL.path, unpackDir.path]
+        try unzip.run()
+        unzip.waitUntilExit()
+        guard unzip.terminationStatus == 0 else {
+            throw NSError(domain: "KlacUpdate", code: 1004, userInfo: [NSLocalizedDescriptionKey: "Не удалось распаковать обновление"])
+        }
+
+        guard let appPath = try self.findAppBundle(in: unpackDir) else {
+            throw NSError(domain: "KlacUpdate", code: 1005, userInfo: [NSLocalizedDescriptionKey: "В архиве не найден Klac.app"])
+        }
+
+        let targetPath = "/Applications/Klac.app"
+        let scriptPath = workDir.appendingPathComponent("install_update.sh")
+        let script = """
+        #!/bin/bash
+        set -euo pipefail
+        APP_SRC='\(appPath.path.replacingOccurrences(of: "'", with: "'\\''"))'
+        APP_DST='\(targetPath)'
+        for _ in {1..40}; do
+          /usr/bin/pkill -f \"${APP_DST}/Contents/MacOS/KlacApp\" >/dev/null 2>&1 || true
+          sleep 0.1
+        done
+        /bin/rm -rf \"$APP_DST\"
+        /usr/bin/ditto \"$APP_SRC\" \"$APP_DST\"
+        /usr/bin/open -a \"$APP_DST\"
+        """
+        try script.write(to: scriptPath, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptPath.path)
+
+        let launch = Process()
+        launch.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
+        launch.arguments = [scriptPath.path]
+        launch.standardOutput = FileHandle.nullDevice
+        launch.standardError = FileHandle.nullDevice
+        try launch.run()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            NSApplication.shared.terminate(nil)
+        }
+
+        NSLog("Update install started for \(version)")
+    }
+
+    private func findAppBundle(in directory: URL) throws -> URL? {
+        let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        while let item = enumerator?.nextObject() as? URL {
+            if item.pathExtension == "app" {
+                return item
+            }
+        }
+        return nil
+    }
+
+    private func currentAppVersion() -> String {
+        if let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+           !short.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return short
+        }
+        return "0.0.0"
+    }
+
+    private func currentAppBuildNumber() -> Int {
+        if let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
+            return Int(build.filter(\.isNumber)) ?? 0
+        }
+        return 0
+    }
+
+    private func normalizedVersion(fromTag tag: String) -> String {
+        let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.hasPrefix("v") {
+            return String(trimmed.dropFirst())
+        }
+        return trimmed
+    }
+
+    private struct ParsedVersion {
+        let core: [Int]
+        let suffix: String
+        let embeddedBuild: Int
+    }
+
+    private func parseVersion(_ raw: String) -> ParsedVersion {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let parts = trimmed.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        let corePart = String(parts.first ?? "")
+        let suffix = parts.count > 1 ? String(parts[1]) : ""
+        let core = corePart.split(separator: ".").map { Int($0.filter(\.isNumber)) ?? 0 }
+
+        // Supports tags like 2.0.4-fix-b17 or 2.0.4-b202603251200.
+        let build = Self.firstIntMatch(in: suffix, pattern: #"b([0-9]{1,14})"#) ?? 0
+        return ParsedVersion(core: core, suffix: suffix, embeddedBuild: build)
+    }
+
+    private static func firstIntMatch(in text: String, pattern: String) -> Int? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let ns = text as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        guard let match = regex.firstMatch(in: text, options: [], range: range),
+              match.numberOfRanges > 1 else { return nil }
+        let captured = ns.substring(with: match.range(at: 1))
+        return Int(captured)
+    }
+
+    private func isVersion(_ candidate: String, newerThan current: String, currentBuild: Int) -> Bool {
+        let a = parseVersion(candidate)
+        let b = parseVersion(current)
+        let count = max(a.core.count, b.core.count)
+        for i in 0 ..< count {
+            let x = i < a.core.count ? a.core[i] : 0
+            let y = i < b.core.count ? b.core[i] : 0
+            if x != y { return x > y }
+        }
+
+        // Same core: prefer explicit suffix update (e.g. 2.0.4-fix over 2.0.4).
+        if a.suffix != b.suffix {
+            if !a.suffix.isEmpty && b.suffix.isEmpty { return true }
+            if a.suffix.isEmpty && !b.suffix.isEmpty { return true }
+            return a.suffix.compare(b.suffix, options: .numeric) == .orderedDescending
+        }
+
+        // Same semantic version and suffix: compare embedded build markers if present.
+        if a.embeddedBuild > 0 {
+            return a.embeddedBuild > max(currentBuild, b.embeddedBuild)
+        }
+        return false
+    }
+
+    private func presentUpdatePrompt(currentVersion: String, latestVersion: String) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Доступно обновление \(latestVersion)"
+        alert.informativeText = "Сейчас установлена версия \(currentVersion).\nСкачать и установить обновление автоматически?"
+        alert.addButton(withTitle: "Скачать и установить")
+        alert.addButton(withTitle: "Позже")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func presentInfoAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     private func relaunchWithDetachedOpen(appURL: URL) {

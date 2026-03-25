@@ -15,41 +15,68 @@ private final class AdvancedSettingsWindowCloseDelegate: NSObject, NSWindowDeleg
 
 struct ContentView: View {
     @EnvironmentObject private var service: KeyboardSoundService
-    @Environment(\.colorScheme) private var systemColorScheme
     @State private var showAccessHintPopover = false
-    private let panelWidth: CGFloat = 266
+    @State private var showSwitchesMenu = false
+    private let outerRadius: CGFloat = 14
+    private let innerRadius: CGFloat = 11
+    private let outerPadding: CGFloat = 12
 
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: backgroundGradient,
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .overlay {
-                ZStack {
-                    Circle()
-                        .fill(accentBlobColor)
-                        .frame(width: 220, height: 220)
-                        .blur(radius: 28)
-                        .offset(x: 96, y: -118)
-                    Circle()
-                        .fill(secondaryBlobColor)
-                        .frame(width: 160, height: 160)
-                        .blur(radius: 24)
-                        .offset(x: -84, y: 108)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                header
-                compactMainCard
-                quickActions
-            }
-            .padding(.horizontal, 0)
-            .padding(.vertical, 0)
-            .frame(width: panelWidth, alignment: .leading)
+        VStack(alignment: .leading, spacing: 0) {
+            menuHeader
+            Divider().opacity(0.65)
+            statusLine
+            Divider().opacity(0.55)
+            profileLine
+            Divider().opacity(0.55)
+            menuActions
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: innerRadius, style: .continuous)
+                .fill(.thinMaterial.opacity(0.30))
+        )
+        .padding(outerPadding)
+        .background(
+            RoundedRectangle(cornerRadius: outerRadius, style: .continuous)
+                .fill(.ultraThinMaterial.opacity(0.58))
+                .overlay {
+                    RoundedRectangle(cornerRadius: outerRadius, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.08),
+                                    Color.clear
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .blendMode(.screen)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: outerRadius, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.black.opacity(0.04),
+                                    Color.clear
+                                ],
+                                startPoint: .bottomTrailing,
+                                endPoint: .topLeading
+                            )
+                        )
+                        .blendMode(.multiply)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: outerRadius, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.7)
+                }
+                .shadow(color: .black.opacity(0.05), radius: 10, x: 0, y: 3)
+        )
+        .frame(width: 340, alignment: .leading)
+        .clipShape(RoundedRectangle(cornerRadius: outerRadius, style: .continuous))
         .onAppear {
             service.start()
         }
@@ -64,47 +91,12 @@ struct ContentView: View {
         }
     }
 
-    private var isDarkTheme: Bool {
-        switch service.appearanceMode {
-        case .system: return systemColorScheme == .dark
-        case .light: return false
-        case .dark: return true
-        }
-    }
-
-    private var backgroundGradient: [Color] {
-        if isDarkTheme {
-            return [
-                Color(red: 0.10, green: 0.16, blue: 0.26),
-                Color(red: 0.07, green: 0.11, blue: 0.19),
-                Color(red: 0.06, green: 0.08, blue: 0.14)
-            ]
-        }
-        return [
-            Color(red: 0.92, green: 0.95, blue: 0.99),
-            Color(red: 0.87, green: 0.92, blue: 0.98),
-            Color(red: 0.82, green: 0.89, blue: 0.97)
-        ]
-    }
-
-    private var accentBlobColor: Color {
-        isDarkTheme ? Color.cyan.opacity(0.18) : Color.blue.opacity(0.16)
-    }
-
-    private var secondaryBlobColor: Color {
-        isDarkTheme ? Color.mint.opacity(0.14) : Color.white.opacity(0.42)
-    }
-
     private var captureStatusTitle: String {
         service.capturingKeyboard ? "Активно" : "Нет доступа"
     }
 
-    private var captureStatusDetail: String {
-        service.capturingKeyboard ? "Глобальный перехват клавиш включён" : "Нужны Accessibility + Input Monitoring"
-    }
-
     private var appVersionCaption: String {
-        let releaseFallbackVersion = "1.7.1"
+        let releaseFallbackVersion = "2.0.5"
         let short = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)?
@@ -123,36 +115,184 @@ struct ContentView: View {
         return "v\(version) (\(buildPart))"
     }
 
-    private var header: some View {
-        HStack {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("Klac")
-                    .font(.system(size: 22, weight: .semibold, design: .rounded))
-                    .foregroundStyle(primaryTextColor)
+    private var menuHeader: some View {
+        HStack(spacing: 10) {
+            Image(systemName: service.capturingKeyboard ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                .foregroundStyle(service.capturingKeyboard ? Color.green : Color.orange)
+                .font(.system(size: 16, weight: .semibold))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(service.isEnabled ? "Enable Klac" : "Disable Klac")
+                    .font(.system(size: 15, weight: .semibold))
                 Text(appVersionCaption)
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(secondaryTextColor)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(.secondary)
             }
             Spacer()
-            HStack(spacing: 10) {
-                Button {
-                    openAdvancedSettingsWindow()
-                } label: {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 14, weight: .semibold))
+            Toggle("", isOn: $service.isEnabled)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(.accentColor)
+                .onChange(of: service.isEnabled) { enabled in
+                    enabled ? service.start() : service.stop()
                 }
-                .buttonStyle(MinimalLiquidActionButtonStyle())
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 2)
+    }
 
-                Toggle("", isOn: $service.isEnabled)
-                    .toggleStyle(.switch)
-                    .tint(.cyan)
-                    .foregroundStyle(primaryTextColor)
-                    .onChange(of: service.isEnabled) { enabled in
-                        enabled ? service.start() : service.stop()
-                    }
+    private var statusLine: some View {
+        HStack(spacing: 8) {
+            Text(captureStatusTitle)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(service.capturingKeyboard ? .green : .orange)
+            Spacer()
+            HStack(spacing: 6) {
+                statusBadge("AX", ok: service.accessibilityGranted)
+                statusBadge("Input", ok: service.inputMonitoringGranted)
+                statusBadge("Tap", ok: service.capturingKeyboard)
+            }
+            Button {
+                showAccessHintPopover.toggle()
+            } label: {
+                Image(systemName: "questionmark.circle")
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .popover(isPresented: $showAccessHintPopover, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Подсказка")
+                        .font(.headline)
+                    Text(service.accessActionHint ?? "Нажми «Проверить». Если не помогло, нажми «Восстановить», выдай доступ и перезапусти приложение.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(12)
+                .frame(width: 320)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 2)
+        .background(.thinMaterial.opacity(0.42), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private var profileLine: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Switches")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+            Button {
+                showSwitchesMenu.toggle()
+            } label: {
+                HStack(spacing: 8) {
+                    Text(service.selectedProfile.title)
+                        .font(.system(size: 14, weight: .medium))
+                        .lineLimit(1)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(.thinMaterial.opacity(0.48), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.20), lineWidth: 0.9)
+                }
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showSwitchesMenu, arrowEdge: .trailing) {
+                switchesMenu
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 2)
+        .background(.thinMaterial.opacity(0.36), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private var switchesMenu: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Switches")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.top, 10)
+                .padding(.bottom, 4)
+
+            ForEach(SoundProfile.allCases) { profile in
+                Button {
+                    service.selectedProfile = profile
+                    showSwitchesMenu = false
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: service.selectedProfile == profile ? "checkmark" : "plus")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(service.selectedProfile == profile ? Color.accentColor : Color.secondary)
+                            .frame(width: 14)
+                        Text(profile.title)
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                }
+                .buttonStyle(.plain)
+                if profile != SoundProfile.allCases.last {
+                    Divider().opacity(0.25).padding(.leading, 34)
+                }
+            }
+        }
+        .frame(width: 320)
+        .background(.ultraThinMaterial.opacity(0.92))
+    }
+
+    private var menuActions: some View {
+        VStack(spacing: 4) {
+            Button {
+                service.checkForUpdatesInteractive()
+            } label: {
+                menuRowLabel("Проверить обновления", icon: "arrow.down.circle")
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                openAdvancedSettingsWindow()
+            } label: {
+                menuRowLabel("Settings...", icon: "gearshape")
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                service.refreshAccessibilityStatus(promptIfNeeded: true)
+            } label: {
+                menuRowLabel("Проверить доступы", icon: "checkmark.shield")
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                service.runAccessRecoveryWizard()
+            } label: {
+                menuRowLabel("Восстановить доступы", icon: "arrow.clockwise")
+            }
+            .buttonStyle(.plain)
+
+            Divider().opacity(0.55)
+                .padding(.vertical, 2)
+
+            Button {
+                NSApplication.shared.terminate(nil)
+            } label: {
+                menuRowLabel("Quit", icon: "power")
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 2)
+        .background(.thinMaterial.opacity(0.30), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 
     private func openAdvancedSettingsWindow() {
@@ -183,102 +323,33 @@ struct ContentView: View {
         AdvancedSettingsWindowHost.window = window
     }
 
-    private var compactMainCard: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(captureStatusTitle)
-                    .font(.system(size: 20, weight: .semibold, design: .rounded))
-                    .foregroundStyle(service.capturingKeyboard ? .green : .orange)
-                Spacer()
-                Button {
-                    showAccessHintPopover.toggle()
-                } label: {
-                    Image(systemName: "questionmark.circle.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                }
-                .buttonStyle(MinimalLiquidActionButtonStyle())
-                .frame(width: 34, height: 28)
-                .popover(isPresented: $showAccessHintPopover, arrowEdge: .bottom) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Подсказка")
-                            .font(.headline)
-                        Text(service.accessActionHint ?? "Нажми «Проверить». Если не помогло, нажми «Восстановить», выдай доступ и перезапусти приложение.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(12)
-                    .frame(width: 320)
-                }
-            }
-
-            HStack(spacing: 5) {
-                statusPill(title: "AX", enabled: service.accessibilityGranted)
-                statusPill(title: "Input", enabled: service.inputMonitoringGranted)
-                statusPill(title: "Tap", enabled: service.capturingKeyboard)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Picker("Профиль", selection: $service.selectedProfile) {
-                    ForEach(SoundProfile.allCases) { profile in
-                        Text(profile.title).tag(profile)
-                    }
-                }
-                .pickerStyle(.menu)
-                .tint(.primary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(6)
-        .background(.thinMaterial.opacity(isDarkTheme ? 0.55 : 0.72), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.white.opacity(isDarkTheme ? 0.22 : 0.30), lineWidth: 1)
-        }
-    }
-
-    private var quickActions: some View {
-        HStack(alignment: .bottom, spacing: 5) {
-            Button("Проверить") { service.refreshAccessibilityStatus(promptIfNeeded: true) }
-                .buttonStyle(MinimalLiquidActionButtonStyle())
-                .frame(width: 98)
-            Button("Восст.") { service.runAccessRecoveryWizard() }
-                .buttonStyle(MinimalLiquidActionButtonStyle())
-                .frame(width: 84)
-            Spacer(minLength: 0)
-            VStack(alignment: .trailing, spacing: 2) {
-                Button {
-                    NSApplication.shared.terminate(nil)
-                } label: {
-                    Image(systemName: "power")
-                        .font(.system(size: 14, weight: .semibold))
-                }
-                .buttonStyle(MinimalLiquidActionButtonStyle())
-                .help("Выход")
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var primaryTextColor: Color {
-        isDarkTheme ? .white.opacity(0.96) : Color(red: 0.17, green: 0.21, blue: 0.27)
-    }
-
-    private var secondaryTextColor: Color {
-        isDarkTheme ? .white.opacity(0.72) : Color(red: 0.34, green: 0.40, blue: 0.50)
-    }
-
-    private func statusPill(title: String, enabled: Bool) -> some View {
+    private func statusBadge(_ title: String, ok: Bool) -> some View {
         Text(title)
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
-            .foregroundStyle(enabled ? .green : .orange)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.thinMaterial, in: Capsule())
-            .overlay {
-                Capsule()
-                    .strokeBorder((enabled ? Color.green : Color.orange).opacity(0.35), lineWidth: 1)
-            }
+            .font(.system(size: 10, weight: .semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .foregroundStyle(ok ? Color.green : Color.orange)
+            .background(Color.primary.opacity(0.08), in: Capsule())
+    }
+
+    private func menuRowLabel(_ text: String, icon: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+            Text(text)
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(.primary)
+            Spacer()
+        }
+        .contentShape(Rectangle())
+        .padding(.horizontal, 2)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.white.opacity(0.0001))
+        )
     }
 }
 
@@ -456,9 +527,18 @@ private struct AdvancedSettingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(service.currentOutputDeviceName)
                             .foregroundStyle(.primary)
+                        Toggle("Персональные настройки устройства", isOn: $service.perDeviceSoundProfileEnabled)
+                            .tint(.cyan)
+                            .foregroundStyle(.primary)
                         Toggle("Автопресет по устройству", isOn: $service.autoOutputPresetEnabled)
                             .tint(.cyan)
                             .foregroundStyle(.primary)
+                        Picker("Профиль устройства", selection: $service.currentOutputPresetMode) {
+                            ForEach(KeyboardSoundService.OutputPresetMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
                         Text("Последний автопресет: \(service.autoOutputPresetLastApplied)")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -809,10 +889,10 @@ private struct MinimalLiquidActionButtonStyle: ButtonStyle {
             : Color.white.opacity(configuration.isPressed ? 0.26 : 0.30)
 
         configuration.label
-            .font(.system(size: 13, weight: .medium, design: .rounded))
+            .font(.system(size: 12, weight: .medium, design: .rounded))
             .foregroundStyle(foreground)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
             .background(Capsule().fill(fill))
             .overlay {
                 Capsule()
