@@ -660,31 +660,17 @@ final class KeyboardSoundService: ObservableObject {
                     return
                 }
 
-                guard let zipAsset = release.assets.first(where: { $0.name.lowercased().hasSuffix(".zip") }),
-                      let zipURL = URL(string: zipAsset.browser_download_url) else {
-                    self.updateStatusText = "В релизе нет zip-артефакта."
+                guard let releaseURL = URL(string: release.html_url) else {
+                    self.updateStatusText = "Некорректная ссылка релиза."
                     self.presentInfoAlert(
                         title: "Обновление недоступно",
-                        message: "Новая версия \(latestVersion) найдена, но zip-файл не найден в assets."
+                        message: "Новая версия \(latestVersion) найдена, но ссылка на релиз некорректна."
                     )
                     return
                 }
 
-                let shouldInstall = self.presentUpdatePrompt(
-                    currentVersion: currentVersion,
-                    latestVersion: latestVersion
-                )
-                guard shouldInstall else {
-                    self.updateStatusText = "Обновление отложено."
-                    return
-                }
-
-                self.updateStatusText = "Загрузка \(latestVersion)..."
-                let downloaded = try await self.downloadFile(from: zipURL)
-
-                self.updateStatusText = "Установка \(latestVersion)..."
-                try self.installUpdateFromZip(downloaded, version: latestVersion)
-                self.updateStatusText = "Установка запущена..."
+                self.updateStatusText = "Найдена версия \(latestVersion). Открываю релиз..."
+                NSWorkspace.shared.open(releaseURL)
             } catch {
                 self.updateStatusText = "Ошибка обновления: \(error.localizedDescription)"
                 self.presentInfoAlert(
@@ -701,6 +687,7 @@ final class KeyboardSoundService: ObservableObject {
             let browser_download_url: String
         }
         let tag_name: String
+        let html_url: String
         let assets: [Asset]
     }
 
