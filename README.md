@@ -107,7 +107,7 @@ tccutil reset ListenEvent com.klacapp.klac
 Полная история версий вынесена в отдельную страницу:
 - [`CHANGELOG.md`](CHANGELOG.md)
 
-Текущая стабильная версия: `2.0.5`.
+Текущая стабильная версия: `2.1.0`.
 
 ## Roadmap 2.x
 - [x] Layers UI: настраиваемые пороги `soft/medium/hard/slam` + live-индикатор слоя.

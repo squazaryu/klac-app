@@ -68,12 +68,14 @@ final class KeyboardSoundService: ObservableObject {
         didSet {
             soundEngine.masterVolume = Float(volume)
             defaults.set(volume, forKey: Keys.volume)
+            persistPerDeviceSnapshotIfNeeded()
         }
     }
     @Published var variation: Double = 0.3 {
         didSet {
             soundEngine.variation = Float(variation)
             defaults.set(variation, forKey: Keys.variation)
+            persistPerDeviceSnapshotIfNeeded()
         }
     }
     @Published var pitchVariation: Double = 0.22 {
@@ -82,6 +84,7 @@ final class KeyboardSoundService: ObservableObject {
             defaults.set(clamped, forKey: Keys.pitchVariation)
             soundEngine.pitchVariationAmount = Float(clamped)
             soundEngine.reloadCurrentProfile()
+            persistPerDeviceSnapshotIfNeeded()
         }
     }
     @Published var playKeyUp = true {
@@ -91,27 +94,32 @@ final class KeyboardSoundService: ObservableObject {
         didSet {
             soundEngine.pressLevel = Float(pressLevel)
             defaults.set(pressLevel, forKey: Keys.pressLevel)
+            persistPerDeviceSnapshotIfNeeded()
         }
     }
     @Published var releaseLevel: Double = 0.65 {
         didSet {
             soundEngine.releaseLevel = Float(releaseLevel)
             defaults.set(releaseLevel, forKey: Keys.releaseLevel)
+            persistPerDeviceSnapshotIfNeeded()
         }
     }
     @Published var spaceLevel: Double = 1.1 {
         didSet {
             soundEngine.spaceLevel = Float(spaceLevel)
             defaults.set(spaceLevel, forKey: Keys.spaceLevel)
+            persistPerDeviceSnapshotIfNeeded()
         }
     }
     @Published var selectedProfile: SoundProfile = .kalihBoxWhite {
         didSet {
             soundEngine.setProfile(selectedProfile)
-            if autoProfileTuningEnabled {
+            if !isRestoringPersistedState, autoProfileTuningEnabled {
                 applyProfileSoundPreset(for: selectedProfile)
             }
-            defaults.set(selectedProfile.rawValue, forKey: Keys.selectedProfile)
+            if !isRestoringPersistedState {
+                defaults.set(selectedProfile.rawValue, forKey: Keys.selectedProfile)
+            }
         }
     }
     @Published var autoProfileTuningEnabled = true {
@@ -199,12 +207,14 @@ final class KeyboardSoundService: ObservableObject {
         didSet {
             defaults.set(stackModeEnabled, forKey: Keys.stackModeEnabled)
             soundEngine.stackModeEnabled = stackModeEnabled
+            persistPerDeviceSnapshotIfNeeded()
         }
     }
     @Published var stackDensity: Double = 0.55 {
         didSet {
             defaults.set(stackDensity, forKey: Keys.stackDensity)
             soundEngine.stackDensity = Float(stackDensity)
+            persistPerDeviceSnapshotIfNeeded()
         }
     }
     @Published var layerThresholdSlam: Double = 0.045 {
@@ -230,6 +240,7 @@ final class KeyboardSoundService: ObservableObject {
             let clamped = minInterKeyGapMs.clamped(to: 0 ... 45)
             defaults.set(clamped, forKey: Keys.minInterKeyGapMs)
             soundEngine.minInterKeyGapMs = Float(clamped)
+            persistPerDeviceSnapshotIfNeeded()
         }
     }
     @Published var releaseDuckingStrength: Double = 0.72 {
@@ -237,6 +248,7 @@ final class KeyboardSoundService: ObservableObject {
             let clamped = releaseDuckingStrength.clamped(to: 0 ... 1)
             defaults.set(clamped, forKey: Keys.releaseDuckingStrength)
             soundEngine.releaseDuckingStrength = Float(clamped)
+            persistPerDeviceSnapshotIfNeeded()
         }
     }
     @Published var releaseDuckingWindowMs: Double = 92 {
@@ -244,6 +256,7 @@ final class KeyboardSoundService: ObservableObject {
             let clamped = releaseDuckingWindowMs.clamped(to: 20 ... 180)
             defaults.set(clamped, forKey: Keys.releaseDuckingWindowMs)
             soundEngine.releaseDuckingWindowMs = Float(clamped)
+            persistPerDeviceSnapshotIfNeeded()
         }
     }
     @Published var releaseTailTightness: Double = 0.38 {
@@ -251,18 +264,21 @@ final class KeyboardSoundService: ObservableObject {
             let clamped = releaseTailTightness.clamped(to: 0 ... 1)
             defaults.set(clamped, forKey: Keys.releaseTailTightness)
             soundEngine.releaseTailTightness = Float(clamped)
+            persistPerDeviceSnapshotIfNeeded()
         }
     }
     @Published var limiterEnabled = true {
         didSet {
             defaults.set(limiterEnabled, forKey: Keys.limiterEnabled)
             soundEngine.limiterEnabled = limiterEnabled
+            persistPerDeviceSnapshotIfNeeded()
         }
     }
     @Published var limiterDrive: Double = 1.2 {
         didSet {
             defaults.set(limiterDrive, forKey: Keys.limiterDrive)
             soundEngine.limiterDrive = Float(limiterDrive)
+            persistPerDeviceSnapshotIfNeeded()
         }
     }
     @Published var typingCPS: Double = 0
@@ -284,7 +300,10 @@ final class KeyboardSoundService: ObservableObject {
         didSet { defaults.set(autoOutputPresetEnabled, forKey: Keys.autoOutputPresetEnabled) }
     }
     @Published var perDeviceSoundProfileEnabled = true {
-        didSet { defaults.set(perDeviceSoundProfileEnabled, forKey: Keys.perDeviceSoundProfileEnabled) }
+        didSet {
+            defaults.set(perDeviceSoundProfileEnabled, forKey: Keys.perDeviceSoundProfileEnabled)
+            persistPerDeviceSnapshotIfNeeded()
+        }
     }
     @Published var currentOutputPresetMode: OutputPresetMode = .auto {
         didSet {
@@ -327,6 +346,11 @@ final class KeyboardSoundService: ObservableObject {
     private var typingTimestamps: [CFAbsoluteTime] = []
     private var typingDecayTimer: Timer?
     private var personalBaselineCPS: Double = 3.0
+    private var perDeviceSoundSnapshots: [String: DeviceSoundSnapshot] = [:]
+    private var appWillTerminateObserver: NSObjectProtocol?
+    private var isRestoringPersistedState = false
+    private var hasPersistedPrimarySettings = false
+    private var initialOutputDeviceResolved = false
 
     private enum Keys {
         static let isEnabled = "settings.isEnabled"
@@ -366,9 +390,31 @@ final class KeyboardSoundService: ObservableObject {
         static let autoOutputPresetEnabled = "settings.autoOutputPresetEnabled"
         static let perDeviceSoundProfileEnabled = "settings.perDeviceSoundProfileEnabled"
         static let appearanceMode = "settings.appearanceMode"
+        static let perDeviceSoundSnapshots = "settings.perDeviceSoundSnapshots"
+    }
+
+    private struct DeviceSoundSnapshot: Codable {
+        var volume: Double
+        var variation: Double
+        var pitchVariation: Double
+        var pressLevel: Double
+        var releaseLevel: Double
+        var spaceLevel: Double
+        var stackModeEnabled: Bool
+        var limiterEnabled: Bool
+        var limiterDrive: Double
+        var minInterKeyGapMs: Double
+        var releaseDuckingStrength: Double
+        var releaseDuckingWindowMs: Double
+        var releaseTailTightness: Double
+        var currentOutputDeviceBoost: Double
     }
 
     init() {
+        migrateLegacySettingsIfNeeded()
+        hasPersistedPrimarySettings = hasPrimaryPersistedSettings()
+
+        isRestoringPersistedState = true
         if defaults.object(forKey: Keys.isEnabled) != nil {
             isEnabled = defaults.bool(forKey: Keys.isEnabled)
         }
@@ -393,12 +439,12 @@ final class KeyboardSoundService: ObservableObject {
         if defaults.object(forKey: Keys.spaceLevel) != nil {
             spaceLevel = defaults.double(forKey: Keys.spaceLevel)
         }
+        if defaults.object(forKey: Keys.autoProfileTuningEnabled) != nil {
+            autoProfileTuningEnabled = defaults.bool(forKey: Keys.autoProfileTuningEnabled)
+        }
         if let profileRaw = defaults.string(forKey: Keys.selectedProfile),
            let profile = SoundProfile(rawValue: profileRaw) {
             selectedProfile = profile
-        }
-        if defaults.object(forKey: Keys.autoProfileTuningEnabled) != nil {
-            autoProfileTuningEnabled = defaults.bool(forKey: Keys.autoProfileTuningEnabled)
         }
         if defaults.object(forKey: Keys.launchAtLogin) != nil {
             launchAtLogin = defaults.bool(forKey: Keys.launchAtLogin)
@@ -473,6 +519,10 @@ final class KeyboardSoundService: ObservableObject {
            let decoded = try? JSONDecoder().decode([String: Double].self, from: data) {
             outputDeviceBoosts = decoded
         }
+        if let data = defaults.data(forKey: Keys.perDeviceSoundSnapshots),
+           let decoded = try? JSONDecoder().decode([String: DeviceSoundSnapshot].self, from: data) {
+            perDeviceSoundSnapshots = decoded
+        }
         if defaults.object(forKey: Keys.autoOutputPresetEnabled) != nil {
             autoOutputPresetEnabled = defaults.bool(forKey: Keys.autoOutputPresetEnabled)
         }
@@ -483,6 +533,7 @@ final class KeyboardSoundService: ObservableObject {
            let mode = AppearanceMode(rawValue: modeRaw) {
             appearanceMode = mode
         }
+        isRestoringPersistedState = false
 
         soundEngine.masterVolume = Float(volume)
         soundEngine.variation = Float(variation)
@@ -530,6 +581,22 @@ final class KeyboardSoundService: ObservableObject {
         }
 
         updateLaunchAtLogin()
+
+        appWillTerminateObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.persistPerDeviceSnapshotIfNeeded()
+            }
+        }
+    }
+
+    deinit {
+        if let appWillTerminateObserver {
+            NotificationCenter.default.removeObserver(appWillTerminateObserver)
+        }
     }
 
     func start() {
@@ -1254,12 +1321,34 @@ final class KeyboardSoundService: ObservableObject {
 
                 let deviceChanged = deviceID != self.lastOutputDeviceID || deviceUID != self.currentOutputDeviceUID
                 if deviceChanged {
+                    let isInitialProbe = !self.initialOutputDeviceResolved
+                    let previousUID = self.currentOutputDeviceUID
+                    if self.perDeviceSoundProfileEnabled, !previousUID.isEmpty {
+                        self.saveSnapshot(for: previousUID)
+                    }
                     self.lastOutputDeviceID = deviceID
                     self.currentOutputDeviceUID = deviceUID
                     self.currentOutputDeviceName = deviceName
                     self.currentOutputDeviceBoost = self.outputDeviceBoosts[deviceUID] ?? 1.0
                     self.soundEngine.handleOutputDeviceChanged()
-                    self.applyAutoOutputPresetIfNeeded(deviceUID: deviceUID, deviceName: deviceName)
+                    var restored = false
+                    if self.perDeviceSoundProfileEnabled, !deviceUID.isEmpty {
+                        restored = self.restoreSnapshot(for: deviceUID)
+                    }
+                    if !restored {
+                        let shouldApplyAutoPreset = !isInitialProbe || !self.hasPersistedPrimarySettings
+                        if shouldApplyAutoPreset {
+                            self.applyAutoOutputPresetIfNeeded(deviceUID: deviceUID, deviceName: deviceName)
+                        } else {
+                            self.autoOutputPresetLastApplied = "Сохраненные настройки"
+                        }
+                        if self.perDeviceSoundProfileEnabled, !deviceUID.isEmpty {
+                            self.saveSnapshot(for: deviceUID)
+                        }
+                    } else {
+                        self.autoOutputPresetLastApplied = "Профиль устройства"
+                    }
+                    self.initialOutputDeviceResolved = true
                 }
 
                 // Some Bluetooth transitions keep the same device UID but momentarily
@@ -1473,6 +1562,87 @@ final class KeyboardSoundService: ObservableObject {
         if let data = try? JSONEncoder().encode(outputDeviceBoosts) {
             defaults.set(data, forKey: Keys.outputDeviceBoosts)
         }
+        if perDeviceSoundProfileEnabled {
+            saveSnapshot(for: currentOutputDeviceUID)
+        }
+    }
+
+    private func persistPerDeviceSnapshotIfNeeded() {
+        guard perDeviceSoundProfileEnabled else { return }
+        guard !currentOutputDeviceUID.isEmpty else { return }
+        saveSnapshot(for: currentOutputDeviceUID)
+    }
+
+    private func hasPrimaryPersistedSettings() -> Bool {
+        defaults.object(forKey: Keys.volume) != nil ||
+            defaults.object(forKey: Keys.selectedProfile) != nil ||
+            defaults.object(forKey: Keys.pressLevel) != nil
+    }
+
+    private func migrateLegacySettingsIfNeeded() {
+        let migrationFlagKey = "settings.migratedLegacyDefaults.v1"
+        if defaults.bool(forKey: migrationFlagKey) { return }
+        defer { defaults.set(true, forKey: migrationFlagKey) }
+
+        guard !hasPrimaryPersistedSettings() else { return }
+        guard let currentDomain = resolveBundleIdentifier(), !currentDomain.isEmpty else { return }
+
+        for legacyDomain in ["com.tumowuh.klac"] where legacyDomain != currentDomain {
+            guard let legacyValues = defaults.persistentDomain(forName: legacyDomain), !legacyValues.isEmpty else { continue }
+            let migrated = legacyValues.filter { $0.key.hasPrefix("settings.") }
+            guard !migrated.isEmpty else { continue }
+            for (key, value) in migrated {
+                defaults.set(value, forKey: key)
+            }
+            NSLog("Migrated \(migrated.count) settings from legacy domain \(legacyDomain)")
+            break
+        }
+    }
+
+    private func currentSnapshot() -> DeviceSoundSnapshot {
+        DeviceSoundSnapshot(
+            volume: volume,
+            variation: variation,
+            pitchVariation: pitchVariation,
+            pressLevel: pressLevel,
+            releaseLevel: releaseLevel,
+            spaceLevel: spaceLevel,
+            stackModeEnabled: stackModeEnabled,
+            limiterEnabled: limiterEnabled,
+            limiterDrive: limiterDrive,
+            minInterKeyGapMs: minInterKeyGapMs,
+            releaseDuckingStrength: releaseDuckingStrength,
+            releaseDuckingWindowMs: releaseDuckingWindowMs,
+            releaseTailTightness: releaseTailTightness,
+            currentOutputDeviceBoost: currentOutputDeviceBoost
+        )
+    }
+
+    private func saveSnapshot(for deviceUID: String) {
+        guard !deviceUID.isEmpty else { return }
+        perDeviceSoundSnapshots[deviceUID] = currentSnapshot()
+        if let data = try? JSONEncoder().encode(perDeviceSoundSnapshots) {
+            defaults.set(data, forKey: Keys.perDeviceSoundSnapshots)
+        }
+    }
+
+    private func restoreSnapshot(for deviceUID: String) -> Bool {
+        guard let snapshot = perDeviceSoundSnapshots[deviceUID] else { return false }
+        volume = snapshot.volume.clamped(to: 0.0 ... 1.0)
+        variation = snapshot.variation.clamped(to: 0.0 ... 1.0)
+        pitchVariation = snapshot.pitchVariation.clamped(to: 0.0 ... 0.6)
+        pressLevel = snapshot.pressLevel.clamped(to: 0.2 ... 1.6)
+        releaseLevel = snapshot.releaseLevel.clamped(to: 0.1 ... 1.4)
+        spaceLevel = snapshot.spaceLevel.clamped(to: 0.2 ... 1.8)
+        stackModeEnabled = snapshot.stackModeEnabled
+        limiterEnabled = snapshot.limiterEnabled
+        limiterDrive = snapshot.limiterDrive.clamped(to: 0.6 ... 2.0)
+        minInterKeyGapMs = snapshot.minInterKeyGapMs.clamped(to: 0 ... 45)
+        releaseDuckingStrength = snapshot.releaseDuckingStrength.clamped(to: 0 ... 1)
+        releaseDuckingWindowMs = snapshot.releaseDuckingWindowMs.clamped(to: 20 ... 180)
+        releaseTailTightness = snapshot.releaseTailTightness.clamped(to: 0 ... 1)
+        currentOutputDeviceBoost = snapshot.currentOutputDeviceBoost.clamped(to: 0.5 ... 2.0)
+        return true
     }
 
     nonisolated private static func readSystemOutputVolume() -> Double? {
