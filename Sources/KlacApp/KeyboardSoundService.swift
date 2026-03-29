@@ -1893,6 +1893,7 @@ final class ClickSoundEngine {
     private var estimatedPlaybackEndTime: CFAbsoluteTime = 0
     private var engineConfigObserver: NSObjectProtocol?
     private var currentProfile: SoundProfile = .kalihBoxWhite
+    private var keepEngineRunning = true
 
     init() {
         rebuildAudioGraph()
@@ -2020,6 +2021,7 @@ final class ClickSoundEngine {
     }
 
     func startIfNeeded() {
+        keepEngineRunning = true
         if !engine.isRunning {
             do {
                 engine.mainMixerNode.outputVolume = 1.0
@@ -2032,6 +2034,7 @@ final class ClickSoundEngine {
     }
 
     func stop() {
+        keepEngineRunning = false
         player.stop()
         engine.stop()
         scheduleLock.lock()
@@ -2041,13 +2044,14 @@ final class ClickSoundEngine {
 
     func handleOutputDeviceChanged() {
         let wasRunning = engine.isRunning
+        let shouldBeRunning = keepEngineRunning || wasRunning
         let now = CFAbsoluteTimeGetCurrent()
         // Debounce noisy route notifications.
         if now - lastOutputDeviceReinit < 0.45 { return }
         lastOutputDeviceReinit = now
 
         rebuildAudioGraph()
-        if wasRunning {
+        if shouldBeRunning {
             startIfNeeded()
         }
         NSLog("Audio engine graph rebuilt after output-device change")
@@ -2090,6 +2094,9 @@ final class ClickSoundEngine {
     }
 
     func playDown(for keyCode: Int, autorepeat: Bool) {
+        if !engine.isRunning, keepEngineRunning {
+            startIfNeeded()
+        }
         guard engine.isRunning else { return }
 
         let keyGroup = resolveKeyGroup(for: keyCode)
@@ -2142,6 +2149,9 @@ final class ClickSoundEngine {
     }
 
     func playUp(for keyCode: Int) {
+        if !engine.isRunning, keepEngineRunning {
+            startIfNeeded()
+        }
         guard engine.isRunning else { return }
         if stackModeEnabled && !strictLevelingEnabled {
             let density = stackDensity.clamped(to: 0.0 ... 1.0)
