@@ -96,7 +96,7 @@ struct ContentView: View {
     }
 
     private var appVersionCaption: String {
-        let releaseFallbackVersion = "2.1.0"
+        let releaseFallbackVersion = "2.1.1"
         let short = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)?
@@ -496,30 +496,62 @@ private struct AdvancedSettingsView: View {
                             .tint(.cyan)
                             .foregroundStyle(.primary)
                         if service.strictVolumeNormalizationEnabled {
+                            Picker("Режим", selection: $service.levelTuningMode) {
+                                ForEach(KeyboardSoundService.LevelTuningMode.allCases) { mode in
+                                    Text(mode.title).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.segmented)
                             sliderRow(title: "Цель @100%", value: $service.autoNormalizeTargetAt100, range: 0.20 ... 1.20)
-                            let p30 = Int((service.autoInverseGainPreview(systemVolumePercent: 30) * 100).rounded())
-                            let p60 = Int((service.autoInverseGainPreview(systemVolumePercent: 60) * 100).rounded())
-                            let p100 = Int((service.autoInverseGainPreview(systemVolumePercent: 100) * 100).rounded())
-                            Text("Текущий gain: x\(String(format: "%.2f", service.liveDynamicGain))")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                            Text("Авто-кривая: Mac 30% → Kbd \(p30)% · 60% → \(p60)% · 100% → \(p100)%")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                            if service.levelTuningMode == .curve {
+                                LevelCurveEditor(
+                                    lowX: $service.levelMacLow,
+                                    lowY: $service.levelKbdLow,
+                                    lowMidX: $service.levelMacLowMid,
+                                    lowMidY: $service.levelKbdLowMid,
+                                    midX: $service.levelMacMid,
+                                    midY: $service.levelKbdMid,
+                                    highMidX: $service.levelMacHighMid,
+                                    highMidY: $service.levelKbdHighMid,
+                                    highX: $service.levelMacHigh,
+                                    highY: $service.levelKbdHigh
+                                )
+                                .frame(height: 196)
+                                Text("Точки: L \(Int((service.levelMacLow * 100).rounded()))/\(Int((service.levelKbdLow * 100).rounded())) · LM \(Int((service.levelMacLowMid * 100).rounded()))/\(Int((service.levelKbdLowMid * 100).rounded())) · M \(Int((service.levelMacMid * 100).rounded()))/\(Int((service.levelKbdMid * 100).rounded())) · HM \(Int((service.levelMacHighMid * 100).rounded()))/\(Int((service.levelKbdHighMid * 100).rounded())) · H \(Int((service.levelMacHigh * 100).rounded()))/\(Int((service.levelKbdHigh * 100).rounded()))")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Простой режим: только целевая громкость на 100% системной громкости.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
                         } else {
+                            Text("Авто-нормализация выключена. Используется ручная кривая уровней.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                             LevelCurveEditor(
                                 lowX: $service.levelMacLow,
                                 lowY: $service.levelKbdLow,
+                                lowMidX: $service.levelMacLowMid,
+                                lowMidY: $service.levelKbdLowMid,
                                 midX: $service.levelMacMid,
                                 midY: $service.levelKbdMid,
+                                highMidX: $service.levelMacHighMid,
+                                highMidY: $service.levelKbdHighMid,
                                 highX: $service.levelMacHigh,
                                 highY: $service.levelKbdHigh
                             )
-                            .frame(height: 208)
-                            Text("Ручной режим: 3 точки кривой (как fan curve).")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                            .frame(height: 196)
                         }
+                        let p30 = Int((service.autoInverseGainPreview(systemVolumePercent: 30) * 100).rounded())
+                        let p60 = Int((service.autoInverseGainPreview(systemVolumePercent: 60) * 100).rounded())
+                        let p100 = Int((service.autoInverseGainPreview(systemVolumePercent: 100) * 100).rounded())
+                        Text("Текущий gain: x\(String(format: "%.2f", service.liveDynamicGain))")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Text("Preview: Mac 30% → Kbd \(p30)% · 60% → \(p60)% · 100% → \(p100)%")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -678,20 +710,24 @@ private struct AdvancedSettingsView: View {
 private struct LevelCurveEditor: View {
     @Binding var lowX: Double
     @Binding var lowY: Double
+    @Binding var lowMidX: Double
+    @Binding var lowMidY: Double
     @Binding var midX: Double
     @Binding var midY: Double
+    @Binding var highMidX: Double
+    @Binding var highMidY: Double
     @Binding var highX: Double
     @Binding var highY: Double
 
     private let xRange: ClosedRange<Double> = 0.05 ... 1.0
     private let yRange: ClosedRange<Double> = 0.20 ... 4.0
-    private let minXGap: Double = 0.03
+    private let minXGap: Double = 0.02
 
     var body: some View {
         GeometryReader { geo in
             let width = geo.size.width
             let height = geo.size.height
-            let plotInsets = EdgeInsets(top: 12, leading: 34, bottom: 24, trailing: 12)
+            let plotInsets = EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12)
             let plot = CGRect(
                 x: plotInsets.leading,
                 y: plotInsets.top,
@@ -700,122 +736,162 @@ private struct LevelCurveEditor: View {
             )
 
             let lowPoint = point(x: lowX, y: lowY, in: plot)
+            let lowMidPoint = point(x: lowMidX, y: lowMidY, in: plot)
             let midPoint = point(x: midX, y: midY, in: plot)
+            let highMidPoint = point(x: highMidX, y: highMidY, in: plot)
             let highPoint = point(x: highX, y: highY, in: plot)
 
             ZStack {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.primary.opacity(0.05))
+                    .fill(Color.primary.opacity(0.045))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.16), lineWidth: 0.9)
+                    }
 
                 Path { path in
-                    for t in stride(from: 0.0, through: 1.0, by: 0.25) {
+                    for t in stride(from: 0.25, through: 0.75, by: 0.25) {
                         let y = plot.maxY - CGFloat(t) * plot.height
                         path.move(to: CGPoint(x: plot.minX, y: y))
                         path.addLine(to: CGPoint(x: plot.maxX, y: y))
                     }
-                    for t in stride(from: 0.0, through: 1.0, by: 0.25) {
+                    for t in stride(from: 0.25, through: 0.75, by: 0.25) {
                         let x = plot.minX + CGFloat(t) * plot.width
                         path.move(to: CGPoint(x: x, y: plot.minY))
                         path.addLine(to: CGPoint(x: x, y: plot.maxY))
                     }
                 }
-                .stroke(Color.primary.opacity(0.12), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                .stroke(Color.primary.opacity(0.10), style: StrokeStyle(lineWidth: 0.8))
 
                 Path { path in
                     path.move(to: lowPoint)
+                    path.addLine(to: lowMidPoint)
                     path.addLine(to: midPoint)
+                    path.addLine(to: highMidPoint)
+                    path.addLine(to: highPoint)
+                    path.addLine(to: CGPoint(x: highPoint.x, y: plot.maxY))
+                    path.addLine(to: CGPoint(x: lowPoint.x, y: plot.maxY))
+                    path.closeSubpath()
+                }
+                .fill(
+                    LinearGradient(
+                        colors: [Color.cyan.opacity(0.16), Color.cyan.opacity(0.02)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+
+                Path { path in
+                    path.move(to: lowPoint)
+                    path.addLine(to: lowMidPoint)
+                    path.addLine(to: midPoint)
+                    path.addLine(to: highMidPoint)
                     path.addLine(to: highPoint)
                 }
                 .stroke(
                     LinearGradient(
-                        colors: [Color.cyan.opacity(0.95), Color.mint.opacity(0.9)],
+                        colors: [Color.cyan.opacity(0.95), Color.mint.opacity(0.88)],
                         startPoint: .leading,
                         endPoint: .trailing
                     ),
-                    style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
+                    style: StrokeStyle(lineWidth: 2.0, lineCap: .round, lineJoin: .round)
                 )
 
                 pointHandle(
                     title: "L",
                     point: lowPoint,
-                    color: Color.cyan,
-                    macPercent: Int((lowX * 100).rounded()),
-                    kbdPercent: Int((lowY * 100).rounded())
+                    color: Color.cyan
                 )
                 .highPriorityGesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { drag in
                             let newX = valueX(from: drag.location, in: plot)
                             let newY = valueY(from: drag.location, in: plot)
-                            lowX = clamp(newX, to: xRange.lowerBound ... (midX - minXGap))
+                            lowX = clamp(newX, to: orderedRange(xRange.lowerBound, lowMidX - minXGap))
                             lowY = clamp(newY, to: yRange)
+                        }
+                )
+
+                pointHandle(
+                    title: "LM",
+                    point: lowMidPoint,
+                    color: Color.teal
+                )
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { drag in
+                            let newX = valueX(from: drag.location, in: plot)
+                            let newY = valueY(from: drag.location, in: plot)
+                            lowMidX = clamp(newX, to: orderedRange(lowX + minXGap, midX - minXGap))
+                            lowMidY = clamp(newY, to: yRange)
                         }
                 )
 
                 pointHandle(
                     title: "M",
                     point: midPoint,
-                    color: Color.green,
-                    macPercent: Int((midX * 100).rounded()),
-                    kbdPercent: Int((midY * 100).rounded())
+                    color: Color.green
                 )
                 .highPriorityGesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { drag in
                             let newX = valueX(from: drag.location, in: plot)
                             let newY = valueY(from: drag.location, in: plot)
-                            midX = clamp(newX, to: (lowX + minXGap) ... (highX - minXGap))
+                            midX = clamp(newX, to: orderedRange(lowMidX + minXGap, highMidX - minXGap))
                             midY = clamp(newY, to: yRange)
+                        }
+                )
+
+                pointHandle(
+                    title: "HM",
+                    point: highMidPoint,
+                    color: Color.blue.opacity(0.85)
+                )
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { drag in
+                            let newX = valueX(from: drag.location, in: plot)
+                            let newY = valueY(from: drag.location, in: plot)
+                            highMidX = clamp(newX, to: orderedRange(midX + minXGap, highX - minXGap))
+                            highMidY = clamp(newY, to: yRange)
                         }
                 )
 
                 pointHandle(
                     title: "H",
                     point: highPoint,
-                    color: Color.blue,
-                    macPercent: Int((highX * 100).rounded()),
-                    kbdPercent: Int((highY * 100).rounded())
+                    color: Color.blue
                 )
                 .highPriorityGesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { drag in
                             let newX = valueX(from: drag.location, in: plot)
                             let newY = valueY(from: drag.location, in: plot)
-                            highX = clamp(newX, to: (midX + minXGap) ... xRange.upperBound)
+                            highX = clamp(newX, to: orderedRange(highMidX + minXGap, xRange.upperBound))
                             highY = clamp(newY, to: yRange)
                         }
                 )
 
-                axisLabel("Kbd %", x: 8, y: plot.minY - 2, align: .leading)
-                axisLabel("Mac %", x: plot.maxX - 2, y: plot.maxY + 8, align: .trailing)
-                axisLabel("20", x: 8, y: plot.maxY - 8, align: .leading)
-                axisLabel("400", x: 8, y: plot.minY - 8, align: .leading)
-                axisLabel("5", x: plot.minX - 2, y: plot.maxY + 8, align: .center)
-                axisLabel("100", x: plot.maxX, y: plot.maxY + 8, align: .center)
+                axisLabel("Kbd gain", x: plot.minX + 4, y: plot.minY + 6, align: .topLeading)
+                axisLabel("Mac volume", x: plot.maxX - 4, y: plot.maxY - 6, align: .bottomTrailing)
             }
         }
         .padding(.top, 2)
     }
 
-    private func pointHandle(title: String, point: CGPoint, color: Color, macPercent: Int, kbdPercent: Int) -> some View {
-        ZStack(alignment: .top) {
+    private func pointHandle(title: String, point: CGPoint, color: Color) -> some View {
+        ZStack {
             Circle()
-                .fill(color.opacity(0.22))
-                .frame(width: 22, height: 22)
+                .fill(.ultraThinMaterial)
+                .frame(width: 16, height: 16)
                 .overlay {
                     Circle()
-                        .stroke(color.opacity(0.95), lineWidth: 1.8)
+                        .stroke(color.opacity(0.95), lineWidth: 1.6)
                 }
-            Text("\(title) \(macPercent)/\(kbdPercent)")
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay {
-                    Capsule()
-                        .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.8)
-                }
-                .offset(y: -18)
+            Text(title)
+                .font(.system(size: 7, weight: .semibold, design: .rounded))
+                .foregroundStyle(color.opacity(0.95))
+                .offset(y: -13)
         }
         .position(point)
     }
@@ -850,6 +926,10 @@ private struct LevelCurveEditor: View {
 
     private func clamp(_ value: Double, to range: ClosedRange<Double>) -> Double {
         min(max(value, range.lowerBound), range.upperBound)
+    }
+
+    private func orderedRange(_ a: Double, _ b: Double) -> ClosedRange<Double> {
+        min(a, b) ... max(a, b)
     }
 }
 

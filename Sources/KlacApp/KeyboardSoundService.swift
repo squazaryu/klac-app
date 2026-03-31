@@ -58,6 +58,20 @@ final class KeyboardSoundService: ObservableObject {
         }
     }
 
+    enum LevelTuningMode: String, CaseIterable, Identifiable {
+        case simple
+        case curve
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .simple: return "Простой"
+            case .curve: return "Кривая"
+            }
+        }
+    }
+
     @Published var isEnabled = true {
         didSet { defaults.set(isEnabled, forKey: Keys.isEnabled) }
     }
@@ -157,6 +171,18 @@ final class KeyboardSoundService: ObservableObject {
             updateDynamicCompensation()
         }
     }
+    @Published var levelMacLowMid: Double = 0.45 {
+        didSet {
+            defaults.set(levelMacLowMid.clamped(to: 0.08 ... 0.93), forKey: Keys.levelMacLowMid)
+            updateDynamicCompensation()
+        }
+    }
+    @Published var levelKbdLowMid: Double = 1.30 {
+        didSet {
+            defaults.set(levelKbdLowMid.clamped(to: 0.20 ... 4.00), forKey: Keys.levelKbdLowMid)
+            updateDynamicCompensation()
+        }
+    }
     @Published var levelMacMid: Double = 0.60 {
         didSet {
             defaults.set(levelMacMid.clamped(to: 0.05 ... 0.95), forKey: Keys.levelMacMid)
@@ -166,6 +192,18 @@ final class KeyboardSoundService: ObservableObject {
     @Published var levelKbdMid: Double = 1.00 {
         didSet {
             defaults.set(levelKbdMid.clamped(to: 0.20 ... 4.00), forKey: Keys.levelKbdMid)
+            updateDynamicCompensation()
+        }
+    }
+    @Published var levelMacHighMid: Double = 0.80 {
+        didSet {
+            defaults.set(levelMacHighMid.clamped(to: 0.10 ... 0.98), forKey: Keys.levelMacHighMid)
+            updateDynamicCompensation()
+        }
+    }
+    @Published var levelKbdHighMid: Double = 0.70 {
+        didSet {
+            defaults.set(levelKbdHighMid.clamped(to: 0.20 ... 4.00), forKey: Keys.levelKbdHighMid)
             updateDynamicCompensation()
         }
     }
@@ -188,6 +226,12 @@ final class KeyboardSoundService: ObservableObject {
             updateDynamicCompensation()
             updateTypingDecayMonitoringState()
             updateTypingAdaptation()
+        }
+    }
+    @Published var levelTuningMode: LevelTuningMode = .curve {
+        didSet {
+            defaults.set(levelTuningMode.rawValue, forKey: Keys.levelTuningMode)
+            updateDynamicCompensation()
         }
     }
     @Published var autoNormalizeTargetAt100: Double = 0.45 {
@@ -368,11 +412,16 @@ final class KeyboardSoundService: ObservableObject {
         static let compensationStrength = "settings.compensationStrength"
         static let levelMacLow = "settings.levelMacLow"
         static let levelKbdLow = "settings.levelKbdLow"
+        static let levelMacLowMid = "settings.levelMacLowMid"
+        static let levelKbdLowMid = "settings.levelKbdLowMid"
         static let levelMacMid = "settings.levelMacMid"
         static let levelKbdMid = "settings.levelKbdMid"
+        static let levelMacHighMid = "settings.levelMacHighMid"
+        static let levelKbdHighMid = "settings.levelKbdHighMid"
         static let levelMacHigh = "settings.levelMacHigh"
         static let levelKbdHigh = "settings.levelKbdHigh"
         static let strictVolumeNormalizationEnabled = "settings.strictVolumeNormalizationEnabled"
+        static let levelTuningMode = "settings.levelTuningMode"
         static let autoNormalizeTargetAt100 = "settings.autoNormalizeTargetAt100"
         static let typingAdaptiveEnabled = "settings.typingAdaptiveEnabled"
         static let stackModeEnabled = "settings.stackModeEnabled"
@@ -400,6 +449,10 @@ final class KeyboardSoundService: ObservableObject {
         var pressLevel: Double
         var releaseLevel: Double
         var spaceLevel: Double
+        var levelMacLowMid: Double
+        var levelKbdLowMid: Double
+        var levelMacHighMid: Double
+        var levelKbdHighMid: Double
         var stackModeEnabled: Bool
         var limiterEnabled: Bool
         var limiterDrive: Double
@@ -408,6 +461,89 @@ final class KeyboardSoundService: ObservableObject {
         var releaseDuckingWindowMs: Double
         var releaseTailTightness: Double
         var currentOutputDeviceBoost: Double
+
+        private enum CodingKeys: String, CodingKey {
+            case volume
+            case variation
+            case pitchVariation
+            case pressLevel
+            case releaseLevel
+            case spaceLevel
+            case levelMacLowMid
+            case levelKbdLowMid
+            case levelMacHighMid
+            case levelKbdHighMid
+            case stackModeEnabled
+            case limiterEnabled
+            case limiterDrive
+            case minInterKeyGapMs
+            case releaseDuckingStrength
+            case releaseDuckingWindowMs
+            case releaseTailTightness
+            case currentOutputDeviceBoost
+        }
+
+        init(
+            volume: Double,
+            variation: Double,
+            pitchVariation: Double,
+            pressLevel: Double,
+            releaseLevel: Double,
+            spaceLevel: Double,
+            levelMacLowMid: Double,
+            levelKbdLowMid: Double,
+            levelMacHighMid: Double,
+            levelKbdHighMid: Double,
+            stackModeEnabled: Bool,
+            limiterEnabled: Bool,
+            limiterDrive: Double,
+            minInterKeyGapMs: Double,
+            releaseDuckingStrength: Double,
+            releaseDuckingWindowMs: Double,
+            releaseTailTightness: Double,
+            currentOutputDeviceBoost: Double
+        ) {
+            self.volume = volume
+            self.variation = variation
+            self.pitchVariation = pitchVariation
+            self.pressLevel = pressLevel
+            self.releaseLevel = releaseLevel
+            self.spaceLevel = spaceLevel
+            self.levelMacLowMid = levelMacLowMid
+            self.levelKbdLowMid = levelKbdLowMid
+            self.levelMacHighMid = levelMacHighMid
+            self.levelKbdHighMid = levelKbdHighMid
+            self.stackModeEnabled = stackModeEnabled
+            self.limiterEnabled = limiterEnabled
+            self.limiterDrive = limiterDrive
+            self.minInterKeyGapMs = minInterKeyGapMs
+            self.releaseDuckingStrength = releaseDuckingStrength
+            self.releaseDuckingWindowMs = releaseDuckingWindowMs
+            self.releaseTailTightness = releaseTailTightness
+            self.currentOutputDeviceBoost = currentOutputDeviceBoost
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            volume = try c.decode(Double.self, forKey: .volume)
+            variation = try c.decode(Double.self, forKey: .variation)
+            pitchVariation = try c.decode(Double.self, forKey: .pitchVariation)
+            pressLevel = try c.decode(Double.self, forKey: .pressLevel)
+            releaseLevel = try c.decode(Double.self, forKey: .releaseLevel)
+            spaceLevel = try c.decode(Double.self, forKey: .spaceLevel)
+            levelMacLowMid = try c.decodeIfPresent(Double.self, forKey: .levelMacLowMid) ?? 0.45
+            levelKbdLowMid = try c.decodeIfPresent(Double.self, forKey: .levelKbdLowMid) ?? 1.30
+            levelMacHighMid = try c.decodeIfPresent(Double.self, forKey: .levelMacHighMid) ?? 0.80
+            levelKbdHighMid = try c.decodeIfPresent(Double.self, forKey: .levelKbdHighMid) ?? 0.70
+            stackModeEnabled = try c.decode(Bool.self, forKey: .stackModeEnabled)
+            limiterEnabled = try c.decode(Bool.self, forKey: .limiterEnabled)
+            limiterDrive = try c.decode(Double.self, forKey: .limiterDrive)
+            minInterKeyGapMs = try c.decode(Double.self, forKey: .minInterKeyGapMs)
+            releaseDuckingStrength = try c.decode(Double.self, forKey: .releaseDuckingStrength)
+            releaseDuckingWindowMs = try c.decode(Double.self, forKey: .releaseDuckingWindowMs)
+            releaseTailTightness = try c.decode(Double.self, forKey: .releaseTailTightness)
+            currentOutputDeviceBoost = try c.decode(Double.self, forKey: .currentOutputDeviceBoost)
+        }
     }
 
     init() {
@@ -461,11 +597,31 @@ final class KeyboardSoundService: ObservableObject {
         if defaults.object(forKey: Keys.levelKbdLow) != nil {
             levelKbdLow = defaults.double(forKey: Keys.levelKbdLow).clamped(to: 0.20 ... 4.00)
         }
+        if defaults.object(forKey: Keys.levelMacLowMid) != nil {
+            levelMacLowMid = defaults.double(forKey: Keys.levelMacLowMid).clamped(to: 0.08 ... 0.93)
+        } else {
+            levelMacLowMid = ((levelMacLow + levelMacMid) * 0.5).clamped(to: 0.08 ... 0.93)
+        }
+        if defaults.object(forKey: Keys.levelKbdLowMid) != nil {
+            levelKbdLowMid = defaults.double(forKey: Keys.levelKbdLowMid).clamped(to: 0.20 ... 4.00)
+        } else {
+            levelKbdLowMid = ((levelKbdLow + levelKbdMid) * 0.5).clamped(to: 0.20 ... 4.00)
+        }
         if defaults.object(forKey: Keys.levelMacMid) != nil {
             levelMacMid = defaults.double(forKey: Keys.levelMacMid).clamped(to: 0.05 ... 0.95)
         }
         if defaults.object(forKey: Keys.levelKbdMid) != nil {
             levelKbdMid = defaults.double(forKey: Keys.levelKbdMid).clamped(to: 0.20 ... 4.00)
+        }
+        if defaults.object(forKey: Keys.levelMacHighMid) != nil {
+            levelMacHighMid = defaults.double(forKey: Keys.levelMacHighMid).clamped(to: 0.10 ... 0.98)
+        } else {
+            levelMacHighMid = ((levelMacMid + levelMacHigh) * 0.5).clamped(to: 0.10 ... 0.98)
+        }
+        if defaults.object(forKey: Keys.levelKbdHighMid) != nil {
+            levelKbdHighMid = defaults.double(forKey: Keys.levelKbdHighMid).clamped(to: 0.20 ... 4.00)
+        } else {
+            levelKbdHighMid = ((levelKbdMid + levelKbdHigh) * 0.5).clamped(to: 0.20 ... 4.00)
         }
         if defaults.object(forKey: Keys.levelMacHigh) != nil {
             levelMacHigh = defaults.double(forKey: Keys.levelMacHigh).clamped(to: 0.10 ... 1.00)
@@ -475,6 +631,10 @@ final class KeyboardSoundService: ObservableObject {
         }
         if defaults.object(forKey: Keys.strictVolumeNormalizationEnabled) != nil {
             strictVolumeNormalizationEnabled = defaults.bool(forKey: Keys.strictVolumeNormalizationEnabled)
+        }
+        if let modeRaw = defaults.string(forKey: Keys.levelTuningMode),
+           let mode = LevelTuningMode(rawValue: modeRaw) {
+            levelTuningMode = mode
         }
         if defaults.object(forKey: Keys.autoNormalizeTargetAt100) != nil {
             autoNormalizeTargetAt100 = defaults.double(forKey: Keys.autoNormalizeTargetAt100).clamped(to: 0.20 ... 1.20)
@@ -1368,20 +1528,16 @@ final class KeyboardSoundService: ObservableObject {
     private func updateDynamicCompensation() {
         var gain: Double
         if strictVolumeNormalizationEnabled {
-            gain = Self.autoInverseGain(
-                systemVolumeScalar: lastSystemVolume,
-                targetAt100: autoNormalizeTargetAt100
-            )
+            if levelTuningMode == .simple {
+                gain = Self.autoInverseGain(
+                    systemVolumeScalar: lastSystemVolume,
+                    targetAt100: autoNormalizeTargetAt100
+                )
+            } else {
+                gain = strictCurveGain(systemVolume: lastSystemVolume)
+            }
         } else {
-            gain = Self.curveGain(
-                systemVolume: lastSystemVolume,
-                macLow: levelMacLow,
-                kbdLow: levelKbdLow,
-                macMid: levelMacMid,
-                kbdMid: levelKbdMid,
-                macHigh: levelMacHigh,
-                kbdHigh: levelKbdHigh
-            )
+            gain = curveGainAt(systemVolume: lastSystemVolume)
         }
         gain *= currentOutputDeviceBoost
 
@@ -1396,6 +1552,30 @@ final class KeyboardSoundService: ObservableObject {
         if abs(liveDynamicGain - next) > 0.005 {
             liveDynamicGain = next
         }
+    }
+
+    private func curveGainAt(systemVolume: Double) -> Double {
+        Self.curveGain(
+            systemVolume: systemVolume,
+            macLow: levelMacLow,
+            kbdLow: levelKbdLow,
+            macLowMid: levelMacLowMid,
+            kbdLowMid: levelKbdLowMid,
+            macMid: levelMacMid,
+            kbdMid: levelKbdMid,
+            macHighMid: levelMacHighMid,
+            kbdHighMid: levelKbdHighMid,
+            macHigh: levelMacHigh,
+            kbdHigh: levelKbdHigh
+        )
+    }
+
+    private func strictCurveGain(systemVolume: Double) -> Double {
+        let base = curveGainAt(systemVolume: systemVolume)
+        let at100 = max(0.001, curveGainAt(systemVolume: 1.0))
+        let target = autoNormalizeTargetAt100.clamped(to: 0.20 ... 1.20)
+        let scale = target / at100
+        return (base * scale).clamped(to: 0.20 ... 12.0)
     }
 
     private func applyLayerThresholds() {
@@ -1440,10 +1620,16 @@ final class KeyboardSoundService: ObservableObject {
 
     func autoInverseGainPreview(systemVolumePercent: Double) -> Double {
         let normalized = (systemVolumePercent / 100.0).clamped(to: 0.0 ... 1.0)
-        return Self.autoInverseGain(
-            systemVolumeScalar: normalized,
-            targetAt100: autoNormalizeTargetAt100
-        )
+        if strictVolumeNormalizationEnabled && levelTuningMode == .simple {
+            return Self.autoInverseGain(
+                systemVolumeScalar: normalized,
+                targetAt100: autoNormalizeTargetAt100
+            )
+        }
+        if strictVolumeNormalizationEnabled {
+            return strictCurveGain(systemVolume: normalized)
+        }
+        return curveGainAt(systemVolume: normalized)
     }
 
     nonisolated private static func autoInverseGain(systemVolumeScalar: Double, targetAt100: Double) -> Double {
@@ -1458,32 +1644,38 @@ final class KeyboardSoundService: ObservableObject {
         systemVolume: Double,
         macLow: Double,
         kbdLow: Double,
+        macLowMid: Double,
+        kbdLowMid: Double,
         macMid: Double,
         kbdMid: Double,
+        macHighMid: Double,
+        kbdHighMid: Double,
         macHigh: Double,
         kbdHigh: Double
     ) -> Double {
         let v = systemVolume.clamped(to: 0.0 ... 1.0)
         let points: [(x: Double, y: Double)] = [
             (macLow.clamped(to: 0.05 ... 0.90), kbdLow.clamped(to: 0.20 ... 4.00)),
+            (macLowMid.clamped(to: 0.08 ... 0.93), kbdLowMid.clamped(to: 0.20 ... 4.00)),
             (macMid.clamped(to: 0.05 ... 0.95), kbdMid.clamped(to: 0.20 ... 4.00)),
+            (macHighMid.clamped(to: 0.10 ... 0.98), kbdHighMid.clamped(to: 0.20 ... 4.00)),
             (macHigh.clamped(to: 0.10 ... 1.00), kbdHigh.clamped(to: 0.20 ... 4.00))
         ].sorted { $0.x < $1.x }
 
-        let p0 = points[0]
-        let p1 = points[1]
-        let p2 = points[2]
-
-        if v <= p0.x { return p0.y }
-        if v <= p1.x {
-            let t = (v - p0.x) / max(0.0001, p1.x - p0.x)
-            return p0.y + (p1.y - p0.y) * t
+        guard let first = points.first, let last = points.last else {
+            return 1.0
         }
-        if v <= p2.x {
-            let t = (v - p1.x) / max(0.0001, p2.x - p1.x)
-            return p1.y + (p2.y - p1.y) * t
+        if v <= first.x { return first.y }
+        if v >= last.x { return last.y }
+        for idx in 1 ..< points.count {
+            let left = points[idx - 1]
+            let right = points[idx]
+            if v <= right.x {
+                let t = (v - left.x) / max(0.0001, right.x - left.x)
+                return left.y + (right.y - left.y) * t
+            }
         }
-        return p2.y
+        return last.y
     }
 
     private func trackTypingHit() {
@@ -1607,6 +1799,10 @@ final class KeyboardSoundService: ObservableObject {
             pressLevel: pressLevel,
             releaseLevel: releaseLevel,
             spaceLevel: spaceLevel,
+            levelMacLowMid: levelMacLowMid,
+            levelKbdLowMid: levelKbdLowMid,
+            levelMacHighMid: levelMacHighMid,
+            levelKbdHighMid: levelKbdHighMid,
             stackModeEnabled: stackModeEnabled,
             limiterEnabled: limiterEnabled,
             limiterDrive: limiterDrive,
@@ -1634,6 +1830,10 @@ final class KeyboardSoundService: ObservableObject {
         pressLevel = snapshot.pressLevel.clamped(to: 0.2 ... 1.6)
         releaseLevel = snapshot.releaseLevel.clamped(to: 0.1 ... 1.4)
         spaceLevel = snapshot.spaceLevel.clamped(to: 0.2 ... 1.8)
+        levelMacLowMid = snapshot.levelMacLowMid.clamped(to: 0.08 ... 0.93)
+        levelKbdLowMid = snapshot.levelKbdLowMid.clamped(to: 0.20 ... 4.00)
+        levelMacHighMid = snapshot.levelMacHighMid.clamped(to: 0.10 ... 0.98)
+        levelKbdHighMid = snapshot.levelKbdHighMid.clamped(to: 0.20 ... 4.00)
         stackModeEnabled = snapshot.stackModeEnabled
         limiterEnabled = snapshot.limiterEnabled
         limiterDrive = snapshot.limiterDrive.clamped(to: 0.6 ... 2.0)
