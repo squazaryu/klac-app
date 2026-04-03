@@ -368,6 +368,10 @@ final class KeyboardSoundService: ObservableObject {
     @Published var liveVelocityLayer = "medium"
     @Published var manifestValidationSummary = "Проверка пака не запускалась"
     @Published var manifestValidationIssues: [String] = []
+    @Published var stressTestInProgress = false
+    @Published var stressTestProgress: Double = 0
+    @Published var stressTestStatus = "Не запускался"
+    @Published var debugLogPreview = "Лог пока пуст."
     @Published var appearanceMode: AppearanceMode = .system {
         didSet { defaults.set(appearanceMode.rawValue, forKey: Keys.appearanceMode) }
     }
@@ -395,6 +399,14 @@ final class KeyboardSoundService: ObservableObject {
     private var isRestoringPersistedState = false
     private var hasPersistedPrimarySettings = false
     private var initialOutputDeviceResolved = false
+    private var debugLogLines: [String] = []
+    private let debugLogCapacity = 1200
+    private static let debugTimestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private static let stressTestKeyCodes = [0, 1, 2, 6, 7, 8, 12, 13, 14, 31, 35, 37, 38, 40, 41, 45, 46, 49, 36, 51, 123, 124, 125, 126]
 
     private enum Keys {
         static let isEnabled = "settings.isEnabled"
@@ -722,12 +734,18 @@ final class KeyboardSoundService: ObservableObject {
                 self?.manifestValidationIssues = issues
             }
         }
+        soundEngine.onDiagnostic = { [weak self] message in
+            Task { @MainActor [weak self] in
+                self?.recordDebug("Audio: \(message)")
+            }
+        }
         soundEngine.setProfile(selectedProfile)
         updateSystemVolumeMonitoringState()
         updateTypingDecayMonitoringState()
         updateDynamicCompensation()
         updateTypingAdaptation()
         refreshAccessibilityStatus(promptIfNeeded: false)
+        recordDebug("Service initialized. profile=\(selectedProfile.rawValue), enabled=\(isEnabled)")
 
         eventTap.onEvent = { [weak self] type, keyCode, isAutorepeat in
             guard let self, self.isEnabled else { return }
@@ -765,13 +783,14 @@ final class KeyboardSoundService: ObservableObject {
         refreshAccessibilityStatus(promptIfNeeded: false)
         soundEngine.startIfNeeded()
         capturingKeyboard = eventTap.start()
-        NSLog("Keyboard capture start result: capturingKeyboard=\(capturingKeyboard), accessibilityGranted=\(accessibilityGranted), inputMonitoringGranted=\(inputMonitoringGranted)")
+        recordDebug("Keyboard capture started. capturing=\(capturingKeyboard), ax=\(accessibilityGranted), input=\(inputMonitoringGranted)")
     }
 
     func stop() {
         eventTap.stop()
         soundEngine.stop()
         capturingKeyboard = false
+        recordDebug("Keyboard capture stopped")
     }
 
     func refreshAccessibilityStatus(promptIfNeeded: Bool) {
@@ -787,7 +806,7 @@ final class KeyboardSoundService: ObservableObject {
             soundEngine.startIfNeeded()
             capturingKeyboard = eventTap.start()
         }
-        NSLog("Privacy status refreshed: accessibilityGranted=\(accessibilityGranted), inputMonitoringGranted=\(inputMonitoringGranted), capturingKeyboard=\(capturingKeyboard)")
+        recordDebug("Privacy status refreshed. ax=\(accessibilityGranted), input=\(inputMonitoringGranted), capturing=\(capturingKeyboard)")
     }
 
     func openAccessibilitySettings() {
@@ -815,10 +834,12 @@ final class KeyboardSoundService: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             self?.refreshAccessibilityStatus(promptIfNeeded: false)
         }
+        recordDebug("Privacy permissions reset for bundleID=\(bundleID)")
     }
 
     func runAccessRecoveryWizard() {
         resetPrivacyPermissions()
+        recordDebug("Access recovery wizard started")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.openAccessibilitySettings()
             self?.openInputMonitoringSettings()
@@ -867,6 +888,7 @@ final class KeyboardSoundService: ObservableObject {
         guard !updateCheckInProgress else { return }
         updateCheckInProgress = true
         updateStatusText = "Проверка..."
+        recordDebug("Update check started")
 
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -880,6 +902,7 @@ final class KeyboardSoundService: ObservableObject {
 
                 guard self.isVersion(latestVersion, newerThan: currentVersion, currentBuild: currentBuild) else {
                     self.updateStatusText = "У вас актуальная версия (\(currentVersion))."
+                    self.recordDebug("Update check: already up to date (\(currentVersion))")
                     self.presentInfoAlert(
                         title: "Обновлений нет",
                         message: "Текущая версия \(currentVersion) уже актуальна."
@@ -889,6 +912,7 @@ final class KeyboardSoundService: ObservableObject {
 
                 guard let releaseURL = URL(string: release.html_url) else {
                     self.updateStatusText = "Некорректная ссылка релиза."
+                    self.recordDebug("Update check: invalid release URL for \(latestVersion)")
                     self.presentInfoAlert(
                         title: "Обновление недоступно",
                         message: "Новая версия \(latestVersion) найдена, но ссылка на релиз некорректна."
@@ -897,9 +921,11 @@ final class KeyboardSoundService: ObservableObject {
                 }
 
                 self.updateStatusText = "Найдена версия \(latestVersion). Открываю релиз..."
+                self.recordDebug("Update check: newer version found \(latestVersion), opening release page")
                 NSWorkspace.shared.open(releaseURL)
             } catch {
                 self.updateStatusText = "Ошибка обновления: \(error.localizedDescription)"
+                self.recordDebug("Update check failed: \(error.localizedDescription)")
                 self.presentInfoAlert(
                     title: "Ошибка обновления",
                     message: error.localizedDescription
@@ -1193,6 +1219,71 @@ final class KeyboardSoundService: ObservableObject {
         }
     }
 
+    func startStressTest(duration: TimeInterval = 20) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await runAutomatedStressTest(duration: duration, includeOutputRouteSimulation: true)
+        }
+    }
+
+    func runAutomatedStressTest(duration: TimeInterval = 20, includeOutputRouteSimulation: Bool = true) async {
+        guard !stressTestInProgress else {
+            recordDebug("Stress test skipped: already in progress")
+            return
+        }
+        let effectiveDuration = duration.clamped(to: 5 ... 180)
+        stressTestInProgress = true
+        stressTestProgress = 0
+        stressTestStatus = "Запущен (\(Int(effectiveDuration))с)"
+        recordDebug("Stress test started. duration=\(Int(effectiveDuration))s, routeSimulation=\(includeOutputRouteSimulation)")
+
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        var downHits = 0
+        var upHits = 0
+        var routeRebuilds = 0
+        let originalProfile = selectedProfile
+
+        if selectedProfile == .customPack {
+            selectedProfile = .kalihBoxWhite
+            recordDebug("Stress test switched profile customPack -> kalihBoxWhite (to guarantee playable samples)")
+        }
+        start()
+        soundEngine.startIfNeeded()
+
+        defer {
+            if selectedProfile != originalProfile {
+                selectedProfile = originalProfile
+                recordDebug("Stress test restored profile to \(originalProfile.rawValue)")
+            }
+            stressTestInProgress = false
+            stressTestProgress = 1
+            let elapsed = CFAbsoluteTimeGetCurrent() - startedAt
+            stressTestStatus = "ОК · \(Int(elapsed.rounded()))с · down \(downHits) / up \(upHits)"
+            recordDebug("Stress test finished. elapsed=\(String(format: "%.2f", elapsed))s, down=\(downHits), up=\(upHits), routeRebuilds=\(routeRebuilds)")
+        }
+
+        while (CFAbsoluteTimeGetCurrent() - startedAt) < effectiveDuration {
+            let keyCode = Self.stressTestKeyCodes.randomElement() ?? 0
+            let autorepeat = Int.random(in: 0 ... 100) < 7
+            soundEngine.playDown(for: keyCode, autorepeat: autorepeat)
+            downHits += 1
+            if playKeyUp || Int.random(in: 0 ... 100) < 75 {
+                soundEngine.playUp(for: keyCode)
+                upHits += 1
+            }
+            if includeOutputRouteSimulation && downHits % 180 == 0 {
+                soundEngine.handleOutputDeviceChanged()
+                routeRebuilds += 1
+            }
+
+            let elapsed = CFAbsoluteTimeGetCurrent() - startedAt
+            stressTestProgress = min(1, elapsed / effectiveDuration)
+
+            let sleepNs = UInt64(Int.random(in: 800_000 ... 4_200_000))
+            try? await Task.sleep(nanoseconds: sleepNs)
+        }
+    }
+
     func applyHeadphonesPreset() {
         volume = 0.62
         variation = 0.42
@@ -1388,8 +1479,9 @@ final class KeyboardSoundService: ObservableObject {
         do {
             let data = try JSONEncoder().encode(snapshot)
             try data.write(to: url, options: .atomic)
+            recordDebug("Settings exported: \(url.path)")
         } catch {
-            NSLog("Failed to export settings: \(error)")
+            recordDebug("Failed to export settings: \(error.localizedDescription)")
         }
     }
 
@@ -1413,8 +1505,32 @@ final class KeyboardSoundService: ObservableObject {
             pressLevel = snapshot.pressLevel.clamped(to: 0.2 ... 1.6)
             releaseLevel = snapshot.releaseLevel.clamped(to: 0.1 ... 1.4)
             spaceLevel = snapshot.spaceLevel.clamped(to: 0.2 ... 1.8)
+            recordDebug("Settings imported: \(url.path)")
         } catch {
-            NSLog("Failed to import settings: \(error)")
+            recordDebug("Failed to import settings: \(error.localizedDescription)")
+        }
+    }
+
+    func clearDebugLog() {
+        debugLogLines.removeAll(keepingCapacity: true)
+        debugLogPreview = "Лог очищен."
+        recordDebug("Debug log cleared")
+    }
+
+    func exportDebugLog() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.plainText]
+        panel.nameFieldStringValue = "klac-debug-\(Self.fileTimestamp()).log"
+        panel.title = "Экспорт debug-логов"
+        panel.message = "Сохранить диагностический лог приложения"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let report = buildDebugReport()
+        do {
+            try report.write(to: url, atomically: true, encoding: .utf8)
+            recordDebug("Debug log exported: \(url.path)")
+        } catch {
+            recordDebug("Failed to export debug log: \(error.localizedDescription)")
         }
     }
 
@@ -1509,6 +1625,7 @@ final class KeyboardSoundService: ObservableObject {
                         self.autoOutputPresetLastApplied = "Профиль устройства"
                     }
                     self.initialOutputDeviceResolved = true
+                    self.recordDebug("Output device changed: \(deviceName) [uid=\(deviceUID.isEmpty ? "n/a" : deviceUID)]")
                 }
 
                 // Some Bluetooth transitions keep the same device UID but momentarily
@@ -1516,6 +1633,7 @@ final class KeyboardSoundService: ObservableObject {
                 let availabilityChanged = wasVolumeAvailable != self.detectedSystemVolumeAvailable
                 if availabilityChanged && !deviceChanged {
                     self.soundEngine.handleOutputDeviceChanged()
+                    self.recordDebug("Output stream availability changed. Rebuilt audio graph")
                 }
 
                 if volumeChanged || deviceChanged || availabilityChanged {
@@ -1598,7 +1716,7 @@ final class KeyboardSoundService: ObservableObject {
             applySpeakersPreset()
             autoOutputPresetLastApplied = "Динамики"
         }
-        NSLog("Auto output preset applied: \(autoOutputPresetLastApplied) for \(deviceName)")
+        recordDebug("Auto output preset applied: \(autoOutputPresetLastApplied) for \(deviceName)")
     }
 
     nonisolated private static func looksLikeHeadphones(_ name: String) -> Bool {
@@ -1746,6 +1864,107 @@ final class KeyboardSoundService: ObservableObject {
         if abs(liveTypingGain - clamped) > 0.005 {
             liveTypingGain = clamped
         }
+    }
+
+    private func buildDebugReport() -> String {
+        var lines: [String] = []
+        lines.append("Klac Debug Report")
+        lines.append("Generated: \(Self.debugTimestampFormatter.string(from: Date()))")
+        lines.append("App version: \(currentAppVersion())")
+        lines.append("Build number: \(currentAppBuildNumber())")
+        lines.append("Build tag: \(Bundle.main.object(forInfoDictionaryKey: "KlacBuildTag") as? String ?? "n/a")")
+        lines.append("macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)")
+        lines.append("Output device: \(currentOutputDeviceName)")
+        lines.append("Output UID: \(currentOutputDeviceUID.isEmpty ? "n/a" : currentOutputDeviceUID)")
+        lines.append("AX granted: \(accessibilityGranted)")
+        lines.append("Input Monitoring granted: \(inputMonitoringGranted)")
+        lines.append("Capturing keyboard: \(capturingKeyboard)")
+        lines.append("System volume available: \(detectedSystemVolumeAvailable)")
+        lines.append("System volume: \(Int(detectedSystemVolumePercent.rounded()))%")
+        lines.append("")
+        lines.append("Runtime settings:")
+        lines.append(contentsOf: snapshotSummaryLines())
+        lines.append("")
+        lines.append("Stress test state: \(stressTestStatus)")
+        lines.append("")
+        lines.append("Recent debug logs:")
+        lines.append(contentsOf: debugLogLines)
+        if let crashSection = latestCrashReportSection() {
+            lines.append("")
+            lines.append(crashSection)
+        }
+        lines.append("")
+        return lines.joined(separator: "\n")
+    }
+
+    private func snapshotSummaryLines() -> [String] {
+        [
+            "- profile=\(selectedProfile.rawValue)",
+            "- volume=\(String(format: "%.3f", volume))",
+            "- variation=\(String(format: "%.3f", variation))",
+            "- pitchVariation=\(String(format: "%.3f", pitchVariation))",
+            "- pressLevel=\(String(format: "%.3f", pressLevel))",
+            "- releaseLevel=\(String(format: "%.3f", releaseLevel))",
+            "- spaceLevel=\(String(format: "%.3f", spaceLevel))",
+            "- dynamicCompensationEnabled=\(dynamicCompensationEnabled)",
+            "- strictVolumeNormalizationEnabled=\(strictVolumeNormalizationEnabled)",
+            "- typingAdaptiveEnabled=\(typingAdaptiveEnabled)",
+            "- stackModeEnabled=\(stackModeEnabled)",
+            "- limiterEnabled=\(limiterEnabled)",
+            "- autoOutputPresetEnabled=\(autoOutputPresetEnabled)",
+            "- perDeviceSoundProfileEnabled=\(perDeviceSoundProfileEnabled)"
+        ]
+    }
+
+    private func latestCrashReportSection() -> String? {
+        let diagnosticsRoot = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/DiagnosticReports", isDirectory: true)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: diagnosticsRoot,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+        let candidates = entries.filter { url in
+            let name = url.lastPathComponent.lowercased()
+            return (name.hasPrefix("klac") || name.hasPrefix("klacapp")) &&
+                (name.hasSuffix(".crash") || name.hasSuffix(".ips"))
+        }
+        guard let latest = candidates.max(by: { lhs, rhs in
+            let ld = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let rd = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return ld < rd
+        }) else {
+            return nil
+        }
+        guard let data = try? Data(contentsOf: latest),
+              let text = String(data: data, encoding: .utf8) else {
+            return "Latest crash report: \(latest.path)\n(unable to decode file)"
+        }
+        let preview = text.split(separator: "\n").prefix(120).joined(separator: "\n")
+        return """
+        Latest crash report: \(latest.path)
+        ----
+        \(preview)
+        ----
+        """
+    }
+
+    private func recordDebug(_ message: String) {
+        let line = "[\(Self.debugTimestampFormatter.string(from: Date()))] \(message)"
+        debugLogLines.append(line)
+        if debugLogLines.count > debugLogCapacity {
+            debugLogLines.removeFirst(debugLogLines.count - debugLogCapacity)
+        }
+        debugLogPreview = debugLogLines.suffix(180).joined(separator: "\n")
+        NSLog("KlacDebug: \(message)")
+    }
+
+    private static func fileTimestamp() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: Date())
     }
 
     private func saveCurrentDeviceBoost() {
@@ -1931,18 +2150,18 @@ final class KeyboardSoundService: ObservableObject {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        var cfUID: CFString?
-        var size = UInt32(MemoryLayout<CFString?>.size)
+        var rawValue: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         let status = AudioObjectGetPropertyData(
             deviceID,
             &address,
             0,
             nil,
             &size,
-            &cfUID
+            &rawValue
         )
-        guard status == noErr, let cfUID else { return nil }
-        return cfUID as String
+        guard status == noErr, let rawValue else { return nil }
+        return rawValue.takeUnretainedValue() as String
     }
 
     nonisolated private static func readOutputDeviceName(_ deviceID: AudioObjectID) -> String? {
@@ -1951,18 +2170,18 @@ final class KeyboardSoundService: ObservableObject {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        var cfName: CFString?
-        var size = UInt32(MemoryLayout<CFString?>.size)
+        var rawValue: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         let status = AudioObjectGetPropertyData(
             deviceID,
             &address,
             0,
             nil,
             &size,
-            &cfName
+            &rawValue
         )
-        guard status == noErr, let cfName else { return nil }
-        return cfName as String
+        guard status == noErr, let rawValue else { return nil }
+        return rawValue.takeUnretainedValue() as String
     }
 
     nonisolated private func runTCCReset(service: String, bundleID: String) {
@@ -2038,9 +2257,7 @@ final class GlobalKeyEventTap {
                     instance.firstEventLogged = true
                     NSLog("Keyboard events are flowing via CGEvent tap (first event keyCode=\(keyCode), type=\(type.rawValue))")
                 }
-                DispatchQueue.main.async {
-                    instance.onEvent?(type == .keyDown ? .down : .up, keyCode, isAutorepeat)
-                }
+                instance.onEvent?(type == .keyDown ? .down : .up, keyCode, isAutorepeat)
                 return Unmanaged.passUnretained(event)
             }
 
@@ -2048,9 +2265,7 @@ final class GlobalKeyEventTap {
                 guard let modifierEvent = instance.modifierEventType(for: keyCode, flags: event.flags) else {
                     return Unmanaged.passUnretained(event)
                 }
-                DispatchQueue.main.async {
-                    instance.onEvent?(modifierEvent, keyCode, false)
-                }
+                instance.onEvent?(modifierEvent, keyCode, false)
             }
 
             return Unmanaged.passUnretained(event)
@@ -2107,15 +2322,21 @@ final class GlobalKeyEventTap {
                     self.firstEventLogged = true
                     NSLog("Keyboard events are flowing via NSEvent global monitor (first keyDown keyCode=\(event.keyCode))")
                 }
-                self.onEvent?(.down, Int(event.keyCode), event.isARepeat)
+                DispatchQueue.main.async {
+                    self.onEvent?(.down, Int(event.keyCode), event.isARepeat)
+                }
             case .keyUp:
-                self.onEvent?(.up, Int(event.keyCode), false)
+                DispatchQueue.main.async {
+                    self.onEvent?(.up, Int(event.keyCode), false)
+                }
             case .flagsChanged:
                 let flags = CGEventFlags(rawValue: UInt64(event.modifierFlags.rawValue))
                 guard let modifierEvent = self.modifierEventType(for: Int(event.keyCode), flags: flags) else {
                     return
                 }
-                self.onEvent?(modifierEvent, Int(event.keyCode), false)
+                DispatchQueue.main.async {
+                    self.onEvent?(modifierEvent, Int(event.keyCode), false)
+                }
             default:
                 return
             }
@@ -2204,6 +2425,7 @@ final class ClickSoundEngine {
     var releaseTailTightness: Float = 0.38
     var onVelocityLayerChanged: ((String) -> Void)?
     var onManifestValidation: ((String, [String]) -> Void)?
+    var onDiagnostic: ((String) -> Void)?
     private var lastDownHitTime: CFAbsoluteTime = 0
     private var slamThreshold: CFAbsoluteTime = 0.045
     private var hardThreshold: CFAbsoluteTime = 0.085
@@ -2259,6 +2481,7 @@ final class ClickSoundEngine {
     }
     private var lastSampleIndexByGroup: [SampleGroup: Int] = [:]
     private var lastOutputDeviceReinit: CFAbsoluteTime = 0
+    private var graphReadyAfter: CFAbsoluteTime = 0
     private let scheduleLock = NSLock()
     private var estimatedPlaybackEndTime: CFAbsoluteTime = 0
     private var engineConfigObserver: NSObjectProtocol?
@@ -2396,10 +2619,15 @@ final class ClickSoundEngine {
             do {
                 engine.mainMixerNode.outputVolume = 1.0
                 try engine.start()
-                player.play()
+                diagnostic("engine started")
             } catch {
-                NSLog("Audio engine start failed: \(error)")
+                diagnostic("engine start failed: \(error.localizedDescription)")
+                return
             }
+        }
+
+        if !player.isPlaying {
+            player.play()
         }
     }
 
@@ -2424,7 +2652,8 @@ final class ClickSoundEngine {
         if shouldBeRunning {
             startIfNeeded()
         }
-        NSLog("Audio engine graph rebuilt after output-device change")
+        graphReadyAfter = CFAbsoluteTimeGetCurrent() + 0.06
+        diagnostic("engine graph rebuilt after output-device change")
     }
 
     func setVelocityThresholds(slam: Double, hard: Double, medium: Double) {
@@ -2464,7 +2693,10 @@ final class ClickSoundEngine {
     }
 
     func playDown(for keyCode: Int, autorepeat: Bool) {
-        if !engine.isRunning, keepEngineRunning {
+        if CFAbsoluteTimeGetCurrent() < graphReadyAfter {
+            return
+        }
+        if keepEngineRunning {
             startIfNeeded()
         }
         guard engine.isRunning else { return }
@@ -2519,7 +2751,10 @@ final class ClickSoundEngine {
     }
 
     func playUp(for keyCode: Int) {
-        if !engine.isRunning, keepEngineRunning {
+        if CFAbsoluteTimeGetCurrent() < graphReadyAfter {
+            return
+        }
+        if keepEngineRunning {
             startIfNeeded()
         }
         guard engine.isRunning else { return }
@@ -2662,9 +2897,6 @@ final class ClickSoundEngine {
         let shouldInterrupt = interruptIfNeeded || queueOverflowInterrupt
         let options: AVAudioPlayerNodeBufferOptions = shouldInterrupt ? [.interrupts] : []
         player.scheduleBuffer(copy, at: nil, options: options, completionHandler: nil)
-        if !player.isPlaying {
-            player.play()
-        }
     }
 
     private func pickSample(from pool: [AVAudioPCMBuffer], group: SampleGroup) -> AVAudioPCMBuffer? {
@@ -3194,6 +3426,14 @@ final class ClickSoundEngine {
 
         return candidates.first {
             FileManager.default.fileExists(atPath: $0.path)
+        }
+    }
+
+    private func diagnostic(_ message: String) {
+        if let onDiagnostic {
+            onDiagnostic(message)
+        } else {
+            NSLog("KlacAudio: \(message)")
         }
     }
 

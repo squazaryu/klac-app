@@ -96,7 +96,7 @@ struct ContentView: View {
     }
 
     private var appVersionCaption: String {
-        let releaseFallbackVersion = "2.1.1"
+        let releaseFallbackVersion = "2.1.2"
         let short = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)?
@@ -611,6 +611,38 @@ private struct AdvancedSettingsView: View {
                             Button("Импорт профиля") { service.importSettings() }
                                 .buttonStyle(PrimaryGlassButtonStyle())
                         }
+                        Divider().opacity(0.45)
+                        Text("Дебаг")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            Button(service.stressTestInProgress ? "Стресс-тест..." : "Стресс-тест 20с") {
+                                service.startStressTest(duration: 20)
+                            }
+                            .buttonStyle(PrimaryGlassButtonStyle())
+                            .disabled(service.stressTestInProgress)
+                            Button("Экспорт логов") { service.exportDebugLog() }
+                                .buttonStyle(PrimaryGlassButtonStyle())
+                            Button("Очистить лог") { service.clearDebugLog() }
+                                .buttonStyle(PrimaryGlassButtonStyle())
+                        }
+                        if service.stressTestInProgress {
+                            ProgressView(value: service.stressTestProgress)
+                                .tint(.cyan)
+                        }
+                        Text("Стресс-тест: \(service.stressTestStatus)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        ScrollView {
+                            Text(service.debugLogPreview)
+                                .font(.system(size: 11, weight: .regular, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                        .frame(height: 150)
+                        .padding(8)
+                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                 }
 

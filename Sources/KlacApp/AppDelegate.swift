@@ -9,7 +9,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = notification
+        if let duration = parseStressDurationFromCLI() {
+            Task { [weak self] in
+                guard let self else { return }
+                await self.keyboardService.runAutomatedStressTest(duration: duration, includeOutputRouteSimulation: true)
+                NSApplication.shared.terminate(nil)
+            }
+            return
+        }
         globalStatusController = StatusBarController(service: keyboardService)
+    }
+
+    private func parseStressDurationFromCLI() -> TimeInterval? {
+        let args = CommandLine.arguments
+        if let index = args.firstIndex(of: "--stress-test") {
+            if index + 1 < args.count, let value = Double(args[index + 1]) {
+                return value
+            }
+            return 20
+        }
+        if let inline = args.first(where: { $0.hasPrefix("--stress-test=") }) {
+            let value = inline.replacingOccurrences(of: "--stress-test=", with: "")
+            return Double(value) ?? 20
+        }
+        return nil
     }
 }
 
