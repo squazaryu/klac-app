@@ -14,7 +14,7 @@ private final class AdvancedSettingsWindowCloseDelegate: NSObject, NSWindowDeleg
 }
 
 struct ContentView: View {
-    @EnvironmentObject private var service: KeyboardSoundService
+    @EnvironmentObject private var viewModel: MenuBarViewModel
     @State private var showAccessHintPopover = false
     @State private var showSwitchesMenu = false
     private let outerRadius: CGFloat = 14
@@ -78,13 +78,13 @@ struct ContentView: View {
         .frame(width: 340, alignment: .leading)
         .clipShape(RoundedRectangle(cornerRadius: outerRadius, style: .continuous))
         .onAppear {
-            service.start()
+            viewModel.start()
         }
         .preferredColorScheme(preferredColorScheme)
     }
 
     private var preferredColorScheme: ColorScheme? {
-        switch service.appearanceMode {
+        switch viewModel.appearanceMode {
         case .system: return nil
         case .light: return .light
         case .dark: return .dark
@@ -92,11 +92,18 @@ struct ContentView: View {
     }
 
     private var captureStatusTitle: String {
-        service.capturingKeyboard ? "Активно" : "Нет доступа"
+        viewModel.capturingKeyboard ? "Активно" : "Нет доступа"
+    }
+
+    private var isEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.isEnabled },
+            set: { viewModel.setEnabled($0) }
+        )
     }
 
     private var appVersionCaption: String {
-        let releaseFallbackVersion = "2.1.3"
+        let releaseFallbackVersion = "2.1.4"
         let short = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)?
@@ -117,24 +124,21 @@ struct ContentView: View {
 
     private var menuHeader: some View {
         HStack(spacing: 10) {
-            Image(systemName: service.capturingKeyboard ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                .foregroundStyle(service.capturingKeyboard ? Color.green : Color.orange)
+            Image(systemName: viewModel.capturingKeyboard ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                .foregroundStyle(viewModel.capturingKeyboard ? Color.green : Color.orange)
                 .font(.system(size: 16, weight: .semibold))
             VStack(alignment: .leading, spacing: 1) {
-                Text(service.isEnabled ? "Enable Klac" : "Disable Klac")
+                Text(viewModel.isEnabled ? "Enable Klac" : "Disable Klac")
                     .font(.system(size: 15, weight: .semibold))
                 Text(appVersionCaption)
                     .font(.system(size: 11, weight: .regular))
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Toggle("", isOn: $service.isEnabled)
+            Toggle("", isOn: isEnabledBinding)
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .tint(.accentColor)
-                .onChange(of: service.isEnabled) { enabled in
-                    enabled ? service.start() : service.stop()
-                }
         }
         .padding(.vertical, 4)
         .padding(.horizontal, 2)
@@ -144,12 +148,12 @@ struct ContentView: View {
         HStack(spacing: 8) {
             Text(captureStatusTitle)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(service.capturingKeyboard ? .green : .orange)
+                .foregroundStyle(viewModel.capturingKeyboard ? .green : .orange)
             Spacer()
             HStack(spacing: 6) {
-                statusBadge("AX", ok: service.accessibilityGranted)
-                statusBadge("Input", ok: service.inputMonitoringGranted)
-                statusBadge("Tap", ok: service.capturingKeyboard)
+                statusBadge("AX", ok: viewModel.accessibilityGranted)
+                statusBadge("Input", ok: viewModel.inputMonitoringGranted)
+                statusBadge("Tap", ok: viewModel.capturingKeyboard)
             }
             Button {
                 showAccessHintPopover.toggle()
@@ -163,7 +167,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Подсказка")
                         .font(.headline)
-                    Text(service.accessActionHint ?? "Нажми «Проверить». Если не помогло, нажми «Восстановить», выдай доступ и перезапусти приложение.")
+                    Text(viewModel.accessActionHint ?? "Нажми «Проверить». Если не помогло, нажми «Восстановить», выдай доступ и перезапусти приложение.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -186,7 +190,7 @@ struct ContentView: View {
                 showSwitchesMenu.toggle()
             } label: {
                 HStack(spacing: 8) {
-                    Text(service.selectedProfile.title)
+                    Text(viewModel.selectedProfile.title)
                         .font(.system(size: 14, weight: .medium))
                         .lineLimit(1)
                     Spacer()
@@ -223,13 +227,13 @@ struct ContentView: View {
 
             ForEach(SoundProfile.allCases) { profile in
                 Button {
-                    service.selectedProfile = profile
+                    viewModel.selectProfile(profile)
                     showSwitchesMenu = false
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: service.selectedProfile == profile ? "checkmark" : "plus")
+                        Image(systemName: viewModel.selectedProfile == profile ? "checkmark" : "plus")
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(service.selectedProfile == profile ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(viewModel.selectedProfile == profile ? Color.accentColor : Color.secondary)
                             .frame(width: 14)
                         Text(profile.title)
                             .font(.system(size: 14, weight: .regular))
@@ -253,7 +257,7 @@ struct ContentView: View {
     private var menuActions: some View {
         VStack(spacing: 4) {
             Button {
-                service.checkForUpdatesInteractive()
+                viewModel.checkForUpdates()
             } label: {
                 menuRowLabel("Проверить обновления", icon: "arrow.down.circle")
             }
@@ -267,14 +271,14 @@ struct ContentView: View {
             .buttonStyle(.plain)
 
             Button {
-                service.refreshAccessibilityStatus(promptIfNeeded: true)
+                viewModel.refreshAccess()
             } label: {
                 menuRowLabel("Проверить доступы", icon: "checkmark.shield")
             }
             .buttonStyle(.plain)
 
             Button {
-                service.runAccessRecoveryWizard()
+                viewModel.recoverAccess()
             } label: {
                 menuRowLabel("Восстановить доступы", icon: "arrow.clockwise")
             }
@@ -303,7 +307,7 @@ struct ContentView: View {
         }
 
         let root = AdvancedSettingsView(
-            service: service,
+            viewModel: AdvancedSettingsViewModel(service: viewModel.service),
             onClose: {
                 AdvancedSettingsWindowHost.window?.close()
             }
@@ -375,7 +379,7 @@ private struct GlassCard<Content: View>: View {
 }
 
 private struct AdvancedSettingsView: View {
-    @ObservedObject var service: KeyboardSoundService
+    @ObservedObject var viewModel: AdvancedSettingsViewModel
     @Environment(\.colorScheme) private var systemColorScheme
     @Environment(\.dismiss) private var dismiss
     var onClose: (() -> Void)? = nil
@@ -389,66 +393,66 @@ private struct AdvancedSettingsView: View {
 
                 GlassCard(title: "Звук") {
                     VStack(alignment: .leading, spacing: 10) {
-                        sliderRow(title: "Громкость", value: $service.volume)
-                        sliderRow(title: "Вариативность", value: $service.variation)
-                        sliderRow(title: "Pitch var", value: $service.pitchVariation, range: 0.0 ... 0.6)
-                        sliderRow(title: "Нажатие", value: $service.pressLevel, range: 0.2 ... 1.6)
-                        sliderRow(title: "Отпускание", value: $service.releaseLevel, range: 0.1 ... 1.4)
-                        sliderRow(title: "Space/Enter", value: $service.spaceLevel, range: 0.2 ... 1.8)
-                        Toggle("Автоподстройка под выбранный пак", isOn: $service.autoProfileTuningEnabled)
+                        sliderRow(title: "Громкость", value: viewModel.binding(\.volume))
+                        sliderRow(title: "Вариативность", value: viewModel.binding(\.variation))
+                        sliderRow(title: "Pitch var", value: viewModel.binding(\.pitchVariation), range: 0.0 ... 0.6)
+                        sliderRow(title: "Нажатие", value: viewModel.binding(\.pressLevel), range: 0.2 ... 1.6)
+                        sliderRow(title: "Отпускание", value: viewModel.binding(\.releaseLevel), range: 0.1 ... 1.4)
+                        sliderRow(title: "Space/Enter", value: viewModel.binding(\.spaceLevel), range: 0.2 ... 1.8)
+                        Toggle("Автоподстройка под выбранный пак", isOn: viewModel.binding(\.autoProfileTuningEnabled))
                             .tint(.cyan)
                             .foregroundStyle(.primary)
-                        Text("Пак-пресет: \(service.profilePresetLastApplied)")
+                        Text("Пак-пресет: \(viewModel.profilePresetLastApplied)")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                        Toggle("Звук отпускания клавиши", isOn: $service.playKeyUp)
+                        Toggle("Звук отпускания клавиши", isOn: viewModel.binding(\.playKeyUp))
                             .tint(.cyan)
                             .foregroundStyle(.primary)
-                        Toggle("Автокомпенсация по системной громкости", isOn: $service.dynamicCompensationEnabled)
+                        Toggle("Автокомпенсация по системной громкости", isOn: viewModel.binding(\.dynamicCompensationEnabled))
                             .tint(.cyan)
                             .foregroundStyle(.primary)
-                        sliderRow(title: "Сила компенсации", value: $service.compensationStrength, range: 0.0 ... 2.0)
-                            .opacity(service.dynamicCompensationEnabled ? 1.0 : 0.45)
-                        Text("Текущая компенсация: x\(String(format: "%.2f", service.liveDynamicGain))")
+                        sliderRow(title: "Сила компенсации", value: viewModel.binding(\.compensationStrength), range: 0.0 ... 2.0)
+                            .opacity(viewModel.dynamicCompensationEnabled ? 1.0 : 0.45)
+                        Text("Текущая компенсация: x\(String(format: "%.2f", viewModel.liveDynamicGain))")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                        Toggle("Адаптация к скорости печати", isOn: $service.typingAdaptiveEnabled)
+                        Toggle("Адаптация к скорости печати", isOn: viewModel.binding(\.typingAdaptiveEnabled))
                             .tint(.cyan)
                             .foregroundStyle(.primary)
-                        Text("Адаптация авто: x\(String(format: "%.2f", service.liveTypingGain)) · \(String(format: "%.1f", service.typingCPS)) CPS")
+                        Text("Адаптация авто: x\(String(format: "%.2f", viewModel.liveTypingGain)) · \(String(format: "%.1f", viewModel.typingCPS)) CPS")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                        Toggle("Stack-режим", isOn: $service.stackModeEnabled)
+                        Toggle("Stack-режим", isOn: viewModel.binding(\.stackModeEnabled))
                             .tint(.cyan)
                             .foregroundStyle(.primary)
-                        sliderRow(title: "Плотность стака", value: $service.stackDensity, range: 0.0 ... 1.0)
-                            .opacity(service.stackModeEnabled ? 1.0 : 0.45)
-                        Toggle("Лимитер пиков", isOn: $service.limiterEnabled)
+                        sliderRow(title: "Плотность стака", value: viewModel.binding(\.stackDensity), range: 0.0 ... 1.0)
+                            .opacity(viewModel.stackModeEnabled ? 1.0 : 0.45)
+                        Toggle("Лимитер пиков", isOn: viewModel.binding(\.limiterEnabled))
                             .tint(.cyan)
                             .foregroundStyle(.primary)
-                        sliderRow(title: "Драйв лимитера", value: $service.limiterDrive, range: 0.6 ... 2.0)
-                            .opacity(service.limiterEnabled ? 1.0 : 0.45)
+                        sliderRow(title: "Драйв лимитера", value: viewModel.binding(\.limiterDrive), range: 0.6 ... 2.0)
+                            .opacity(viewModel.limiterEnabled ? 1.0 : 0.45)
                         HStack(spacing: 8) {
-                            Picker("A/B", selection: $service.abFeature) {
+                            Picker("A/B", selection: viewModel.binding(\.abFeature)) {
                                 ForEach(KeyboardSoundService.ABFeature.allCases) { feature in
                                     Text(feature.title).tag(feature)
                                 }
                             }
                             .pickerStyle(.menu)
                             .tint(.primary)
-                            Button(service.isABPlaying ? "Сравнение..." : "Сравнить OFF/ON") {
-                                service.playABComparison()
+                            Button(viewModel.isABPlaying ? "Сравнение..." : "Сравнить OFF/ON") {
+                                viewModel.playABComparison()
                             }
                             .buttonStyle(PrimaryGlassButtonStyle())
-                            .disabled(service.isABPlaying)
+                            .disabled(viewModel.isABPlaying)
                         }
                         Text("Проигрывает два теста подряд: сначала OFF, затем ON.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         HStack {
-                            Button("Пресет: Наушники") { service.applyHeadphonesPreset() }
+                            Button("Пресет: Наушники") { viewModel.applyHeadphonesPreset() }
                                 .buttonStyle(PrimaryGlassButtonStyle())
-                            Button("Пресет: Динамики") { service.applySpeakersPreset() }
+                            Button("Пресет: Динамики") { viewModel.applySpeakersPreset() }
                                 .buttonStyle(PrimaryGlassButtonStyle())
                         }
                     }
@@ -456,14 +460,14 @@ private struct AdvancedSettingsView: View {
 
                 GlassCard(title: "Layers") {
                     VStack(alignment: .leading, spacing: 10) {
-                        layerSliderRow(title: "Slam", value: $service.layerThresholdSlam, range: 0.010 ... 0.120)
-                        layerSliderRow(title: "Hard", value: $service.layerThresholdHard, range: 0.025 ... 0.180)
-                        layerSliderRow(title: "Medium", value: $service.layerThresholdMedium, range: 0.040 ... 0.260)
-                        sliderRow(title: "Min gap", value: $service.minInterKeyGapMs, range: 0 ... 45, suffix: " ms", width: 64)
-                        sliderRow(title: "Duck release", value: $service.releaseDuckingStrength, range: 0 ... 1)
-                        sliderRow(title: "Duck window", value: $service.releaseDuckingWindowMs, range: 20 ... 180, suffix: " ms", width: 64)
-                        sliderRow(title: "Tail tight", value: $service.releaseTailTightness, range: 0 ... 1)
-                        Text("Live слой: \(service.liveVelocityLayer)")
+                        layerSliderRow(title: "Slam", value: viewModel.binding(\.layerThresholdSlam), range: 0.010 ... 0.120)
+                        layerSliderRow(title: "Hard", value: viewModel.binding(\.layerThresholdHard), range: 0.025 ... 0.180)
+                        layerSliderRow(title: "Medium", value: viewModel.binding(\.layerThresholdMedium), range: 0.040 ... 0.260)
+                        sliderRow(title: "Min gap", value: viewModel.binding(\.minInterKeyGapMs), range: 0 ... 45, suffix: " ms", width: 64)
+                        sliderRow(title: "Duck release", value: viewModel.binding(\.releaseDuckingStrength), range: 0 ... 1)
+                        sliderRow(title: "Duck window", value: viewModel.binding(\.releaseDuckingWindowMs), range: 20 ... 180, suffix: " ms", width: 64)
+                        sliderRow(title: "Tail tight", value: viewModel.binding(\.releaseTailTightness), range: 0 ... 1)
+                        Text("Live слой: \(viewModel.liveVelocityLayer)")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -471,11 +475,11 @@ private struct AdvancedSettingsView: View {
 
                 GlassCard(title: "Пак звуков") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(service.manifestValidationSummary)
+                        Text(viewModel.manifestValidationSummary)
                             .font(.footnote.weight(.semibold))
-                            .foregroundStyle(service.manifestValidationIssues.isEmpty ? Color.green : Color.orange)
-                        if !service.manifestValidationIssues.isEmpty {
-                            ForEach(Array(service.manifestValidationIssues.prefix(4)), id: \.self) { issue in
+                            .foregroundStyle(viewModel.manifestValidationIssues.isEmpty ? Color.green : Color.orange)
+                        if !viewModel.manifestValidationIssues.isEmpty {
+                            ForEach(Array(viewModel.manifestValidationIssues.prefix(4)), id: \.self) { issue in
                                 Text("• \(issue)")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
@@ -486,38 +490,38 @@ private struct AdvancedSettingsView: View {
 
                 GlassCard(title: "Уровни") {
                     VStack(alignment: .leading, spacing: 10) {
-                        let systemVolumeCaption = service.detectedSystemVolumeAvailable
-                            ? "\(Int(service.detectedSystemVolumePercent.rounded()))%"
+                        let systemVolumeCaption = viewModel.detectedSystemVolumeAvailable
+                            ? "\(Int(viewModel.detectedSystemVolumePercent.rounded()))%"
                             : "нет данных"
                         Text("Системная громкость: \(systemVolumeCaption)")
                             .font(.footnote)
-                            .foregroundStyle(service.detectedSystemVolumeAvailable ? Color.secondary : Color.orange)
-                        Toggle("Авто-нормализация (inverse-кривая)", isOn: $service.strictVolumeNormalizationEnabled)
+                            .foregroundStyle(viewModel.detectedSystemVolumeAvailable ? Color.secondary : Color.orange)
+                        Toggle("Авто-нормализация (inverse-кривая)", isOn: viewModel.binding(\.strictVolumeNormalizationEnabled))
                             .tint(.cyan)
                             .foregroundStyle(.primary)
-                        if service.strictVolumeNormalizationEnabled {
-                            Picker("Режим", selection: $service.levelTuningMode) {
+                        if viewModel.strictVolumeNormalizationEnabled {
+                            Picker("Режим", selection: viewModel.binding(\.levelTuningMode)) {
                                 ForEach(KeyboardSoundService.LevelTuningMode.allCases) { mode in
                                     Text(mode.title).tag(mode)
                                 }
                             }
                             .pickerStyle(.segmented)
-                            sliderRow(title: "Цель @100%", value: $service.autoNormalizeTargetAt100, range: 0.20 ... 1.20)
-                            if service.levelTuningMode == .curve {
+                            sliderRow(title: "Цель @100%", value: viewModel.binding(\.autoNormalizeTargetAt100), range: 0.20 ... 1.20)
+                            if viewModel.levelTuningMode == .curve {
                                 LevelCurveEditor(
-                                    lowX: $service.levelMacLow,
-                                    lowY: $service.levelKbdLow,
-                                    lowMidX: $service.levelMacLowMid,
-                                    lowMidY: $service.levelKbdLowMid,
-                                    midX: $service.levelMacMid,
-                                    midY: $service.levelKbdMid,
-                                    highMidX: $service.levelMacHighMid,
-                                    highMidY: $service.levelKbdHighMid,
-                                    highX: $service.levelMacHigh,
-                                    highY: $service.levelKbdHigh
+                                    lowX: viewModel.binding(\.levelMacLow),
+                                    lowY: viewModel.binding(\.levelKbdLow),
+                                    lowMidX: viewModel.binding(\.levelMacLowMid),
+                                    lowMidY: viewModel.binding(\.levelKbdLowMid),
+                                    midX: viewModel.binding(\.levelMacMid),
+                                    midY: viewModel.binding(\.levelKbdMid),
+                                    highMidX: viewModel.binding(\.levelMacHighMid),
+                                    highMidY: viewModel.binding(\.levelKbdHighMid),
+                                    highX: viewModel.binding(\.levelMacHigh),
+                                    highY: viewModel.binding(\.levelKbdHigh)
                                 )
                                 .frame(height: 196)
-                                Text("Точки: L \(Int((service.levelMacLow * 100).rounded()))/\(Int((service.levelKbdLow * 100).rounded())) · LM \(Int((service.levelMacLowMid * 100).rounded()))/\(Int((service.levelKbdLowMid * 100).rounded())) · M \(Int((service.levelMacMid * 100).rounded()))/\(Int((service.levelKbdMid * 100).rounded())) · HM \(Int((service.levelMacHighMid * 100).rounded()))/\(Int((service.levelKbdHighMid * 100).rounded())) · H \(Int((service.levelMacHigh * 100).rounded()))/\(Int((service.levelKbdHigh * 100).rounded()))")
+                                Text("Точки: L \(Int((viewModel.levelMacLow * 100).rounded()))/\(Int((viewModel.levelKbdLow * 100).rounded())) · LM \(Int((viewModel.levelMacLowMid * 100).rounded()))/\(Int((viewModel.levelKbdLowMid * 100).rounded())) · M \(Int((viewModel.levelMacMid * 100).rounded()))/\(Int((viewModel.levelKbdMid * 100).rounded())) · HM \(Int((viewModel.levelMacHighMid * 100).rounded()))/\(Int((viewModel.levelKbdHighMid * 100).rounded())) · H \(Int((viewModel.levelMacHigh * 100).rounded()))/\(Int((viewModel.levelKbdHigh * 100).rounded()))")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             } else {
@@ -530,23 +534,23 @@ private struct AdvancedSettingsView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                             LevelCurveEditor(
-                                lowX: $service.levelMacLow,
-                                lowY: $service.levelKbdLow,
-                                lowMidX: $service.levelMacLowMid,
-                                lowMidY: $service.levelKbdLowMid,
-                                midX: $service.levelMacMid,
-                                midY: $service.levelKbdMid,
-                                highMidX: $service.levelMacHighMid,
-                                highMidY: $service.levelKbdHighMid,
-                                highX: $service.levelMacHigh,
-                                highY: $service.levelKbdHigh
+                                lowX: viewModel.binding(\.levelMacLow),
+                                lowY: viewModel.binding(\.levelKbdLow),
+                                lowMidX: viewModel.binding(\.levelMacLowMid),
+                                lowMidY: viewModel.binding(\.levelKbdLowMid),
+                                midX: viewModel.binding(\.levelMacMid),
+                                midY: viewModel.binding(\.levelKbdMid),
+                                highMidX: viewModel.binding(\.levelMacHighMid),
+                                highMidY: viewModel.binding(\.levelKbdHighMid),
+                                highX: viewModel.binding(\.levelMacHigh),
+                                highY: viewModel.binding(\.levelKbdHigh)
                             )
                             .frame(height: 196)
                         }
-                        let p30 = Int((service.autoInverseGainPreview(systemVolumePercent: 30) * 100).rounded())
-                        let p60 = Int((service.autoInverseGainPreview(systemVolumePercent: 60) * 100).rounded())
-                        let p100 = Int((service.autoInverseGainPreview(systemVolumePercent: 100) * 100).rounded())
-                        Text("Текущий gain: x\(String(format: "%.2f", service.liveDynamicGain))")
+                        let p30 = Int((viewModel.autoInverseGainPreview(systemVolumePercent: 30) * 100).rounded())
+                        let p60 = Int((viewModel.autoInverseGainPreview(systemVolumePercent: 60) * 100).rounded())
+                        let p100 = Int((viewModel.autoInverseGainPreview(systemVolumePercent: 100) * 100).rounded())
+                        Text("Текущий gain: x\(String(format: "%.2f", viewModel.liveDynamicGain))")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         Text("Preview: Mac 30% → Kbd \(p30)% · 60% → \(p60)% · 100% → \(p100)%")
@@ -557,24 +561,24 @@ private struct AdvancedSettingsView: View {
 
                 GlassCard(title: "Устройство вывода") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(service.currentOutputDeviceName)
+                        Text(viewModel.currentOutputDeviceName)
                             .foregroundStyle(.primary)
-                        Toggle("Персональные настройки устройства", isOn: $service.perDeviceSoundProfileEnabled)
+                        Toggle("Персональные настройки устройства", isOn: viewModel.binding(\.perDeviceSoundProfileEnabled))
                             .tint(.cyan)
                             .foregroundStyle(.primary)
-                        Toggle("Автопресет по устройству", isOn: $service.autoOutputPresetEnabled)
+                        Toggle("Автопресет по устройству", isOn: viewModel.binding(\.autoOutputPresetEnabled))
                             .tint(.cyan)
                             .foregroundStyle(.primary)
-                        Picker("Профиль устройства", selection: $service.currentOutputPresetMode) {
+                        Picker("Профиль устройства", selection: viewModel.binding(\.currentOutputPresetMode)) {
                             ForEach(KeyboardSoundService.OutputPresetMode.allCases) { mode in
                                 Text(mode.title).tag(mode)
                             }
                         }
                         .pickerStyle(.segmented)
-                        Text("Последний автопресет: \(service.autoOutputPresetLastApplied)")
+                        Text("Последний автопресет: \(viewModel.autoOutputPresetLastApplied)")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                        sliderRow(title: "Калибровка", value: $service.currentOutputDeviceBoost, range: 0.5 ... 2.0)
+                        sliderRow(title: "Калибровка", value: viewModel.binding(\.currentOutputDeviceBoost), range: 0.5 ... 2.0)
                         Text("Отдельно сохраняется для каждого аудиоустройства.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -583,32 +587,32 @@ private struct AdvancedSettingsView: View {
 
                 GlassCard(title: "Инфографика") {
                     HStack(spacing: 12) {
-                        metricBox(title: "CPS", value: String(format: "%.1f", service.typingCPS))
-                        metricBox(title: "WPM", value: String(format: "%.0f", service.typingWPM))
+                        metricBox(title: "CPS", value: String(format: "%.1f", viewModel.typingCPS))
+                        metricBox(title: "WPM", value: String(format: "%.0f", viewModel.typingWPM))
                     }
                 }
 
                 GlassCard(title: "Система") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Toggle("Автозапуск при входе в систему", isOn: $service.launchAtLogin)
+                        Toggle("Автозапуск при входе в систему", isOn: viewModel.binding(\.launchAtLogin))
                             .tint(.cyan)
                             .foregroundStyle(.primary)
-                        Picker("Тема", selection: $service.appearanceMode) {
+                        Picker("Тема", selection: viewModel.binding(\.appearanceMode)) {
                             ForEach(KeyboardSoundService.AppearanceMode.allCases) { mode in
                                 Text(mode.title).tag(mode)
                             }
                         }
                         .pickerStyle(.segmented)
                         HStack {
-                            Button("Проверить доступы") { service.refreshAccessibilityStatus(promptIfNeeded: true) }
+                            Button("Проверить доступы") { viewModel.refreshAccessibilityStatus(promptIfNeeded: true) }
                                 .buttonStyle(PrimaryGlassButtonStyle())
-                            Button("Мастер восстановления") { service.runAccessRecoveryWizard() }
+                            Button("Мастер восстановления") { viewModel.runAccessRecoveryWizard() }
                                 .buttonStyle(PrimaryGlassButtonStyle())
                         }
                         HStack {
-                            Button("Экспорт профиля") { service.exportSettings() }
+                            Button("Экспорт профиля") { viewModel.exportSettings() }
                                 .buttonStyle(PrimaryGlassButtonStyle())
-                            Button("Импорт профиля") { service.importSettings() }
+                            Button("Импорт профиля") { viewModel.importSettings() }
                                 .buttonStyle(PrimaryGlassButtonStyle())
                         }
                         Divider().opacity(0.45)
@@ -616,25 +620,25 @@ private struct AdvancedSettingsView: View {
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(.secondary)
                         HStack {
-                            Button(service.stressTestInProgress ? "Стресс-тест..." : "Стресс-тест 20с") {
-                                service.startStressTest(duration: 20)
+                            Button(viewModel.stressTestInProgress ? "Стресс-тест..." : "Стресс-тест 20с") {
+                                viewModel.startStressTest(duration: 20)
                             }
                             .buttonStyle(PrimaryGlassButtonStyle())
-                            .disabled(service.stressTestInProgress)
-                            Button("Экспорт логов") { service.exportDebugLog() }
+                            .disabled(viewModel.stressTestInProgress)
+                            Button("Экспорт логов") { viewModel.exportDebugLog() }
                                 .buttonStyle(PrimaryGlassButtonStyle())
-                            Button("Очистить лог") { service.clearDebugLog() }
+                            Button("Очистить лог") { viewModel.clearDebugLog() }
                                 .buttonStyle(PrimaryGlassButtonStyle())
                         }
-                        if service.stressTestInProgress {
-                            ProgressView(value: service.stressTestProgress)
+                        if viewModel.stressTestInProgress {
+                            ProgressView(value: viewModel.stressTestProgress)
                                 .tint(.cyan)
                         }
-                        Text("Стресс-тест: \(service.stressTestStatus)")
+                        Text("Стресс-тест: \(viewModel.stressTestStatus)")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         ScrollView {
-                            Text(service.debugLogPreview)
+                            Text(viewModel.debugLogPreview)
                                 .font(.system(size: 11, weight: .regular, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -674,7 +678,7 @@ private struct AdvancedSettingsView: View {
     }
 
     private var preferredColorScheme: ColorScheme? {
-        switch service.appearanceMode {
+        switch viewModel.appearanceMode {
         case .system: return nil
         case .light: return .light
         case .dark: return .dark
@@ -682,7 +686,7 @@ private struct AdvancedSettingsView: View {
     }
 
     private var isDarkTheme: Bool {
-        switch service.appearanceMode {
+        switch viewModel.appearanceMode {
         case .system: return systemColorScheme == .dark
         case .light: return false
         case .dark: return true

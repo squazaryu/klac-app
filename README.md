@@ -2,7 +2,7 @@
 
 Клац — приложение в строке меню macOS, которое воспроизводит звуки механической клавиатуры при глобальном вводе.
 
-Текущая стабильная версия: `2.1.3`.
+Текущая стабильная версия: `2.1.4`.
 История изменений: [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Содержание
@@ -111,13 +111,13 @@ cd "/path/to/klac-app"
 
 Пример ручной сборки:
 ```bash
-APP_VERSION="2.1.3" BUILD_NUMBER="202604031300" BUILD_TAG="local" ./scripts/build_app.sh --install
+APP_VERSION="2.1.4" BUILD_NUMBER="202604031300" BUILD_TAG="local" ./scripts/build_app.sh --install
 ```
 
 ## Релиз в GitHub
 ```bash
 cd "/path/to/klac-app"
-./scripts/release.sh v2.1.3
+./scripts/release.sh v2.1.4
 ```
 
 Скрипт:
@@ -129,10 +129,10 @@ cd "/path/to/klac-app"
 
 Полезные флаги:
 ```bash
-./scripts/release.sh v2.1.3 --dry-run
-./scripts/release.sh v2.1.3 --notes-file RELEASE_NOTES.md
-./scripts/release.sh v2.1.3 --skip-push
-./scripts/release.sh v2.1.3 --zip-only
+./scripts/release.sh v2.1.4 --dry-run
+./scripts/release.sh v2.1.4 --notes-file RELEASE_NOTES.md
+./scripts/release.sh v2.1.4 --skip-push
+./scripts/release.sh v2.1.4 --zip-only
 ```
 
 ## Права macOS (TCC)

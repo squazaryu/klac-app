@@ -36,16 +36,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+@MainActor
 final class StatusBarController: NSObject {
     private let statusItem: NSStatusItem
     private let popover: NSPopover
     private let hostingController: NSHostingController<AnyView>
     private var eventMonitor: Any?
+    private let menuViewModel: MenuBarViewModel
 
     init(service: KeyboardSoundService) {
+        menuViewModel = MenuBarViewModel(service: service)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         popover = NSPopover()
-        let rootView = AnyView(ContentView().environmentObject(service))
+        let rootView = AnyView(ContentView().environmentObject(menuViewModel))
         hostingController = NSHostingController(rootView: rootView)
         super.init()
 

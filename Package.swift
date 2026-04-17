@@ -20,6 +20,10 @@ let package = Package(
                 .linkedFramework("ApplicationServices"),
                 .linkedFramework("AVFoundation")
             ]
+        ),
+        .testTarget(
+            name: "KlacAppTests",
+            dependencies: ["KlacApp"]
         )
     ]
 )

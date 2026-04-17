@@ -2,6 +2,19 @@
 
 Все заметные изменения по версиям.
 
+## 2.1.4
+- Проведен целевой архитектурный рефакторинг без rewrite:
+  - `SettingsRepository` для typed-загрузки настроек и legacy-migration;
+  - `SystemAudioMonitor`, `TypingMetricsService`, `UpdateCheckService`, `SoundPresetService`, `AppMetadataService`;
+  - `AudioGraphController`, `PlaybackScheduler`, `AudioMixResolver`.
+- Снижен размер и связность `KeyboardSoundService`: вынесены тяжелые внутренние зоны, `didSet`-синхронизация частично унифицирована через typed helper-методы.
+- Уменьшена связность UI и service-слоя:
+  - для popover добавлен `MenuBarViewModel`;
+  - для окна расширенных настроек добавлен `AdvancedSettingsViewModel`;
+  - UI-энумы вынесены в `Core/KlacUIEnums.swift`.
+- Добавлены/расширены unit-тесты на чистую логику:
+  - versioning, compensation math, device classifier, typing metrics, sample parsing/picking, settings repository, audio mix resolver.
+
 ## 2.1.3
 - Добавлен fail-safe watchdog в рантайме для самовосстановления после подвисаний без crash-report.
 - Введен автоматический сброс застрявшего опроса системной громкости (`systemPollInFlight`) при таймауте.
