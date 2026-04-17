@@ -387,10 +387,13 @@ final class KeyboardSoundService: ObservableObject {
     private var lastSystemVolume: Double = 1.0
     private let systemMonitorQueue = DispatchQueue(label: "Klac.SystemAudioMonitor", qos: .utility)
     private var systemPollInFlight = false
+    private var lastSystemPollStartedAt: CFAbsoluteTime = 0
     private var lastOutputDeviceID: AudioObjectID = 0
     private var outputDeviceBoosts: [String: Double] = [:]
     private var currentOutputDeviceUID = ""
     private var lastAutoPresetDeviceUID = ""
+    private var lastInputEventAt: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
+    private var failSafeTimer: Timer?
     private var typingTimestamps: [CFAbsoluteTime] = []
     private var typingDecayTimer: Timer?
     private var personalBaselineCPS: Double = 3.0
@@ -742,6 +745,7 @@ final class KeyboardSoundService: ObservableObject {
         soundEngine.setProfile(selectedProfile)
         updateSystemVolumeMonitoringState()
         updateTypingDecayMonitoringState()
+        startFailSafeMonitoring()
         updateDynamicCompensation()
         updateTypingAdaptation()
         refreshAccessibilityStatus(promptIfNeeded: false)
@@ -749,6 +753,7 @@ final class KeyboardSoundService: ObservableObject {
 
         eventTap.onEvent = { [weak self] type, keyCode, isAutorepeat in
             guard let self, self.isEnabled else { return }
+            self.lastInputEventAt = CFAbsoluteTimeGetCurrent()
             if type == .down {
                 if isAutorepeat { return }
                 self.trackTypingHit()
@@ -775,6 +780,7 @@ final class KeyboardSoundService: ObservableObject {
         if let appWillTerminateObserver {
             NotificationCenter.default.removeObserver(appWillTerminateObserver)
         }
+        failSafeTimer?.invalidate()
     }
 
     func start() {
@@ -1573,6 +1579,7 @@ final class KeyboardSoundService: ObservableObject {
     private func pollSystemVolume() {
         if systemPollInFlight { return }
         systemPollInFlight = true
+        lastSystemPollStartedAt = CFAbsoluteTimeGetCurrent()
         systemMonitorQueue.async { [weak self] in
             let scalar = Self.readSystemOutputVolume()
             let deviceID = Self.readDefaultOutputDeviceID() ?? 0
@@ -1581,7 +1588,10 @@ final class KeyboardSoundService: ObservableObject {
 
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                defer { self.systemPollInFlight = false }
+                defer {
+                    self.systemPollInFlight = false
+                    self.lastSystemPollStartedAt = 0
+                }
 
                 let wasVolumeAvailable = self.detectedSystemVolumeAvailable
                 self.detectedSystemVolumeAvailable = scalar != nil
@@ -1640,6 +1650,40 @@ final class KeyboardSoundService: ObservableObject {
                     self.updateDynamicCompensation()
                 }
             }
+        }
+    }
+
+    private func startFailSafeMonitoring() {
+        failSafeTimer?.invalidate()
+        failSafeTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.runFailSafeTick()
+            }
+        }
+    }
+
+    private func runFailSafeTick() {
+        let now = CFAbsoluteTimeGetCurrent()
+
+        if systemPollInFlight, lastSystemPollStartedAt > 0 {
+            let pollStall = now - lastSystemPollStartedAt
+            if pollStall > 6.0 {
+                systemPollInFlight = false
+                lastSystemPollStartedAt = 0
+                recordDebug("Fail-safe: reset stuck system-volume poll (\(String(format: "%.1f", pollStall))s)")
+            }
+        }
+
+        if isEnabled, !capturingKeyboard, accessibilityGranted, inputMonitoringGranted {
+            let restarted = eventTap.start()
+            capturingKeyboard = restarted
+            if restarted {
+                recordDebug("Fail-safe: keyboard capture auto-restarted")
+            }
+        }
+
+        if isEnabled {
+            soundEngine.runFailSafeTick()
         }
     }
 
@@ -2402,6 +2446,8 @@ enum SoundProfile: String, CaseIterable, Identifiable {
 }
 
 final class ClickSoundEngine {
+    private let audioQueue = DispatchQueue(label: "Klac.AudioEngineQueue", qos: .userInteractive)
+    private let audioQueueKey = DispatchSpecificKey<UInt8>()
     private var engine = AVAudioEngine()
     private var player = AVAudioPlayerNode()
     private let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
@@ -2484,12 +2530,16 @@ final class ClickSoundEngine {
     private var graphReadyAfter: CFAbsoluteTime = 0
     private let scheduleLock = NSLock()
     private var estimatedPlaybackEndTime: CFAbsoluteTime = 0
+    private var lastPlaybackActivityAt: CFAbsoluteTime = 0
     private var engineConfigObserver: NSObjectProtocol?
     private var currentProfile: SoundProfile = .kalihBoxWhite
     private var keepEngineRunning = true
 
     init() {
-        rebuildAudioGraph()
+        audioQueue.setSpecific(key: audioQueueKey, value: 1)
+        onAudioQueueSync {
+            rebuildAudioGraph()
+        }
     }
 
     deinit {
@@ -2499,8 +2549,9 @@ final class ClickSoundEngine {
     }
 
     func setProfile(_ profile: SoundProfile) {
-        currentProfile = profile
-        switch profile {
+        onAudioQueueSync {
+            currentProfile = profile
+            switch profile {
         case .customPack:
             if let root = customPackRoot, installCustomPack(from: root) {
                 return
@@ -2597,72 +2648,85 @@ final class ClickSoundEngine {
                 configFilename: "config-eg-oreo.json"
             )
         }
+        }
     }
 
     func reloadCurrentProfile() {
-        setProfile(currentProfile)
+        onAudioQueueSync {
+            setProfile(currentProfile)
+        }
     }
 
     func installCustomPack(from root: URL) -> Bool {
-        let resolvedRoot = Self.resolveRoot(for: root)
-        let loaded = loadBankFromDirectory(resolvedRoot)
-        guard !loaded.downSamples(for: .alpha, layer: .medium).isEmpty,
-              !loaded.downLayers.isEmpty else { return false }
-        customPackRoot = resolvedRoot
-        bank = loaded
-        return true
+        onAudioQueueSync {
+            let resolvedRoot = Self.resolveRoot(for: root)
+            let loaded = loadBankFromDirectory(resolvedRoot)
+            guard !loaded.downSamples(for: .alpha, layer: .medium).isEmpty,
+                  !loaded.downLayers.isEmpty else { return false }
+            customPackRoot = resolvedRoot
+            bank = loaded
+            return true
+        }
     }
 
     func startIfNeeded() {
-        keepEngineRunning = true
-        if !engine.isRunning {
-            do {
-                engine.mainMixerNode.outputVolume = 1.0
-                try engine.start()
-                diagnostic("engine started")
-            } catch {
-                diagnostic("engine start failed: \(error.localizedDescription)")
-                return
+        onAudioQueueSync {
+            keepEngineRunning = true
+            if !engine.isRunning {
+                do {
+                    engine.mainMixerNode.outputVolume = 1.0
+                    try engine.start()
+                    diagnostic("engine started")
+                } catch {
+                    diagnostic("engine start failed: \(error.localizedDescription)")
+                    return
+                }
             }
-        }
 
-        if !player.isPlaying {
-            player.play()
+            if !player.isPlaying {
+                player.play()
+            }
         }
     }
 
     func stop() {
-        keepEngineRunning = false
-        player.stop()
-        engine.stop()
-        scheduleLock.lock()
-        estimatedPlaybackEndTime = 0
-        scheduleLock.unlock()
+        onAudioQueueSync {
+            keepEngineRunning = false
+            player.stop()
+            engine.stop()
+            scheduleLock.lock()
+            estimatedPlaybackEndTime = 0
+            scheduleLock.unlock()
+        }
     }
 
     func handleOutputDeviceChanged() {
-        let wasRunning = engine.isRunning
-        let shouldBeRunning = keepEngineRunning || wasRunning
-        let now = CFAbsoluteTimeGetCurrent()
-        // Debounce noisy route notifications.
-        if now - lastOutputDeviceReinit < 0.45 { return }
-        lastOutputDeviceReinit = now
+        onAudioQueueSync {
+            let wasRunning = engine.isRunning
+            let shouldBeRunning = keepEngineRunning || wasRunning
+            let now = CFAbsoluteTimeGetCurrent()
+            // Debounce noisy route notifications.
+            if now - lastOutputDeviceReinit < 0.45 { return }
+            lastOutputDeviceReinit = now
 
-        rebuildAudioGraph()
-        if shouldBeRunning {
-            startIfNeeded()
+            rebuildAudioGraph()
+            if shouldBeRunning {
+                startIfNeeded()
+            }
+            graphReadyAfter = CFAbsoluteTimeGetCurrent() + 0.06
+            diagnostic("engine graph rebuilt after output-device change")
         }
-        graphReadyAfter = CFAbsoluteTimeGetCurrent() + 0.06
-        diagnostic("engine graph rebuilt after output-device change")
     }
 
     func setVelocityThresholds(slam: Double, hard: Double, medium: Double) {
-        let s = slam.clamped(to: 0.010 ... 0.120)
-        let h = max(s + 0.006, hard).clamped(to: 0.025 ... 0.180)
-        let m = max(h + 0.006, medium).clamped(to: 0.040 ... 0.260)
-        slamThreshold = s
-        hardThreshold = h
-        mediumThreshold = m
+        onAudioQueueSync {
+            let s = slam.clamped(to: 0.010 ... 0.120)
+            let h = max(s + 0.006, hard).clamped(to: 0.025 ... 0.180)
+            let m = max(h + 0.006, medium).clamped(to: 0.040 ... 0.260)
+            slamThreshold = s
+            hardThreshold = h
+            mediumThreshold = m
+        }
     }
 
     private func rebuildAudioGraph() {
@@ -2693,6 +2757,31 @@ final class ClickSoundEngine {
     }
 
     func playDown(for keyCode: Int, autorepeat: Bool) {
+        onAudioQueueAsync { [weak self] in
+            self?._playDown(for: keyCode, autorepeat: autorepeat)
+        }
+    }
+
+    func playUp(for keyCode: Int) {
+        onAudioQueueAsync { [weak self] in
+            self?._playUp(for: keyCode)
+        }
+    }
+
+    func runFailSafeTick() {
+        onAudioQueueAsync { [weak self] in
+            guard let self else { return }
+            if keepEngineRunning && !engine.isRunning {
+                startIfNeeded()
+                diagnostic("fail-safe: audio engine restarted")
+            } else if keepEngineRunning, !player.isPlaying, (CFAbsoluteTimeGetCurrent() - lastPlaybackActivityAt) < 1.8 {
+                player.play()
+                diagnostic("fail-safe: player resumed")
+            }
+        }
+    }
+
+    private func _playDown(for keyCode: Int, autorepeat: Bool) {
         if CFAbsoluteTimeGetCurrent() < graphReadyAfter {
             return
         }
@@ -2750,7 +2839,7 @@ final class ClickSoundEngine {
         schedule(pickSample(from: pool, group: sampleGroup), gain: gain, interruptIfNeeded: interrupt)
     }
 
-    func playUp(for keyCode: Int) {
+    private func _playUp(for keyCode: Int) {
         if CFAbsoluteTimeGetCurrent() < graphReadyAfter {
             return
         }
@@ -2897,6 +2986,18 @@ final class ClickSoundEngine {
         let shouldInterrupt = interruptIfNeeded || queueOverflowInterrupt
         let options: AVAudioPlayerNodeBufferOptions = shouldInterrupt ? [.interrupts] : []
         player.scheduleBuffer(copy, at: nil, options: options, completionHandler: nil)
+        lastPlaybackActivityAt = now
+    }
+
+    private func onAudioQueueAsync(_ work: @escaping () -> Void) {
+        audioQueue.async(execute: work)
+    }
+
+    private func onAudioQueueSync<T>(_ work: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: audioQueueKey) != nil {
+            return work()
+        }
+        return audioQueue.sync(execute: work)
     }
 
     private func pickSample(from pool: [AVAudioPCMBuffer], group: SampleGroup) -> AVAudioPCMBuffer? {
