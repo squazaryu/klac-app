@@ -1,5 +1,25 @@
 import Foundation
 
+protocol AppMetadataProviding {
+    func currentAppVersion() -> String
+    func currentAppBuildNumber() -> Int
+    func resolveBundleIdentifier() -> String?
+}
+
+struct SystemAppMetadataProvider: AppMetadataProviding {
+    func currentAppVersion() -> String {
+        AppMetadataService.currentAppVersion()
+    }
+
+    func currentAppBuildNumber() -> Int {
+        AppMetadataService.currentAppBuildNumber()
+    }
+
+    func resolveBundleIdentifier() -> String? {
+        AppMetadataService.resolveBundleIdentifier()
+    }
+}
+
 enum AppMetadataService {
     static func currentAppVersion(bundle: Bundle = .main) -> String {
         if let short = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,

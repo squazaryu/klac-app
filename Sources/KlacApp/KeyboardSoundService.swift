@@ -1,7 +1,6 @@
 import AppKit
 import CoreAudio
 import Foundation
-import UniformTypeIdentifiers
 
 @MainActor
 final class KeyboardSoundService: ObservableObject {
@@ -11,7 +10,7 @@ final class KeyboardSoundService: ObservableObject {
     typealias LevelTuningMode = KlacLevelTuningMode
 
     @Published var isEnabled = true {
-        didSet { defaults.set(isEnabled, forKey: SettingsKeys.isEnabled) }
+        didSet { syncSettingFlag(isEnabled, key: SettingsKeys.isEnabled) }
     }
     @Published var accessibilityGranted = false
     @Published var inputMonitoringGranted = false
@@ -34,7 +33,7 @@ final class KeyboardSoundService: ObservableObject {
         }
     }
     @Published var playKeyUp = true {
-        didSet { defaults.set(playKeyUp, forKey: SettingsKeys.playKeyUp) }
+        didSet { syncSettingFlag(playKeyUp, key: SettingsKeys.playKeyUp) }
     }
     @Published var pressLevel: Double = 1.0 {
         didSet { syncSoundScalar(pressLevel, key: SettingsKeys.pressLevel, apply: { soundEngine.pressLevel = $0 }) }
@@ -49,7 +48,7 @@ final class KeyboardSoundService: ObservableObject {
         didSet { syncSelectedProfile(selectedProfile) }
     }
     @Published var autoProfileTuningEnabled = true {
-        didSet { defaults.set(autoProfileTuningEnabled, forKey: SettingsKeys.autoProfileTuningEnabled) }
+        didSet { syncSettingFlag(autoProfileTuningEnabled, key: SettingsKeys.autoProfileTuningEnabled) }
     }
     @Published var profilePresetLastApplied = "—"
     @Published var launchAtLogin = false {
@@ -180,12 +179,13 @@ final class KeyboardSoundService: ObservableObject {
         }
     }
     @Published var autoOutputPresetEnabled = true {
-        didSet { defaults.set(autoOutputPresetEnabled, forKey: SettingsKeys.autoOutputPresetEnabled) }
+        didSet { syncSettingFlag(autoOutputPresetEnabled, key: SettingsKeys.autoOutputPresetEnabled) }
     }
     @Published var perDeviceSoundProfileEnabled = true {
         didSet {
-            defaults.set(perDeviceSoundProfileEnabled, forKey: SettingsKeys.perDeviceSoundProfileEnabled)
-            persistPerDeviceSnapshotIfNeeded()
+            syncSettingFlag(perDeviceSoundProfileEnabled, key: SettingsKeys.perDeviceSoundProfileEnabled) {
+                self.persistPerDeviceSnapshotIfNeeded()
+            }
         }
     }
     @Published var currentOutputPresetMode: OutputPresetMode = .auto {
@@ -212,43 +212,122 @@ final class KeyboardSoundService: ObservableObject {
     @Published var stressTestStatus = "Не запускался"
     @Published var debugLogPreview = "Лог пока пуст."
     @Published var appearanceMode: AppearanceMode = .system {
-        didSet { defaults.set(appearanceMode.rawValue, forKey: SettingsKeys.appearanceMode) }
+        didSet { syncSettingString(appearanceMode.rawValue, key: SettingsKeys.appearanceMode) }
     }
 
     private let soundEngine = ClickSoundEngine()
-    private let eventTap = GlobalKeyEventTap()
+    private let inputMonitor: KeyboardInputMonitorCoordinator
     @Published var capturingKeyboard = false
-    private let defaults = UserDefaults.standard
-    private let settingsStore = SettingsStore()
-    private let settingsRepository = SettingsRepository()
-    private let updateService = KlacUpdateService(owner: "squazaryu", repository: "klac-app")
-    private lazy var updateCheckService = UpdateCheckService(fetchLatestRelease: { [updateService] in
-        try await updateService.fetchLatestRelease()
-    })
+    private let settingsStore: SettingsStore
+    private let settingsRepository: SettingsRepository
+    private let updateCheckFlowCoordinator: any UpdateCheckFlowCoordinating
     private let debugLogService = DebugLogService(capacity: 1200)
-    private let systemAudioMonitor = SystemAudioMonitor()
-    private var lastSystemVolume: Double = 1.0
-    private var lastOutputDeviceID: AudioObjectID = 0
-    private var outputDeviceBoosts: [String: Double] = [:]
-    private var currentOutputDeviceUID = ""
-    private var lastAutoPresetDeviceUID = ""
-    private var lastInputEventAt: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
+    private let diagnosticsSnapshotFactory = DiagnosticsRuntimeSnapshotFactory()
+    private let profileSettingsTransferCoordinator: any ProfileSettingsTransferCoordinating
+    private let debugLogExportCoordinator: any DebugLogExportCoordinating
+    private let systemAudioMonitor: any SystemAudioMonitoring
+    private struct RuntimeState {
+        var lastSystemVolume: Double = 1.0
+        var lastOutputDeviceID: AudioObjectID = 0
+        var currentOutputDeviceUID: String = ""
+        var lastAutoPresetDeviceUID: String = ""
+        var hasPersistedPrimarySettings: Bool = false
+        var initialOutputDeviceResolved: Bool = false
+    }
+    private var runtimeState = RuntimeState()
+    private var perDeviceSnapshotService: PerDeviceSnapshotService
     private var failSafeTimer: Timer?
     private let typingMetricsService = TypingMetricsService()
-    private var perDeviceSoundSnapshots: [String: DeviceSoundSnapshot] = [:]
     private var appWillTerminateObserver: NSObjectProtocol?
     private var isRestoringPersistedState = false
-    private var hasPersistedPrimarySettings = false
-    private var initialOutputDeviceResolved = false
-    private var debugLogLines: [String] = []
-    private static let debugTimestampFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
+    private let permissionsController: PermissionsControlling
+    private let launchAtLoginController: LaunchAtLoginControlling
+    private let appRestartController: AppRestartControlling
+    private let alertPresenter: InfoAlertPresenting
+    private let urlOpener: URLOpening
+    private let appMetadataProvider: AppMetadataProviding
+    private let accessRecoveryCoordinator: AccessRecoveryCoordinator
+    private var lastSystemVolume: Double {
+        get { runtimeState.lastSystemVolume }
+        set { runtimeState.lastSystemVolume = newValue }
+    }
 
-    init() {
-        let persistedState = settingsRepository.loadState()
+    private var lastOutputDeviceID: AudioObjectID {
+        get { runtimeState.lastOutputDeviceID }
+        set { runtimeState.lastOutputDeviceID = newValue }
+    }
+
+    private var currentOutputDeviceUID: String {
+        get { runtimeState.currentOutputDeviceUID }
+        set { runtimeState.currentOutputDeviceUID = newValue }
+    }
+
+    private var lastAutoPresetDeviceUID: String {
+        get { runtimeState.lastAutoPresetDeviceUID }
+        set { runtimeState.lastAutoPresetDeviceUID = newValue }
+    }
+
+    private var hasPersistedPrimarySettings: Bool {
+        get { runtimeState.hasPersistedPrimarySettings }
+        set { runtimeState.hasPersistedPrimarySettings = newValue }
+    }
+
+    private var initialOutputDeviceResolved: Bool {
+        get { runtimeState.initialOutputDeviceResolved }
+        set { runtimeState.initialOutputDeviceResolved = newValue }
+    }
+
+    init(
+        inputMonitoring: KeyboardInputMonitoring = GlobalKeyEventTap(),
+        permissionsController: PermissionsControlling = SystemPermissionsController(),
+        launchAtLoginController: LaunchAtLoginControlling = SystemLaunchAtLoginController(),
+        appRestartController: AppRestartControlling = SystemAppRestartController(),
+        fileDialogService: FileDialogPresenting = SystemFileDialogService(),
+        fileReadWriter: FileReadWriting = FileSystemReadWriter(),
+        profileSettingsTransferCoordinator: (any ProfileSettingsTransferCoordinating)? = nil,
+        debugLogExportCoordinator: (any DebugLogExportCoordinating)? = nil,
+        settingsStore: SettingsStore = SettingsStore(),
+        settingsRepository: SettingsRepository? = nil,
+        systemAudioMonitor: (any SystemAudioMonitoring)? = nil,
+        alertPresenter: InfoAlertPresenting = SystemInfoAlertPresenter(),
+        urlOpener: URLOpening = SystemURLOpener(),
+        appMetadataProvider: AppMetadataProviding = SystemAppMetadataProvider(),
+        accessRecoveryCoordinator: AccessRecoveryCoordinator = AccessRecoveryCoordinator(),
+        updateCheckFlowCoordinator: (any UpdateCheckFlowCoordinating)? = nil
+    ) {
+        inputMonitor = KeyboardInputMonitorCoordinator(monitor: inputMonitoring)
+        self.permissionsController = permissionsController
+        self.launchAtLoginController = launchAtLoginController
+        self.appRestartController = appRestartController
+        self.settingsStore = settingsStore
+        self.settingsRepository = settingsRepository ?? SettingsRepository(store: settingsStore)
+        self.alertPresenter = alertPresenter
+        self.urlOpener = urlOpener
+        self.appMetadataProvider = appMetadataProvider
+        self.accessRecoveryCoordinator = accessRecoveryCoordinator
+        let defaultUpdateFlow = UpdateCheckFlowCoordinator(
+            updateChecker: UpdateCheckService(fetchLatestRelease: {
+                try await KlacUpdateService(owner: "squazaryu", repository: "klac-app").fetchLatestRelease()
+            })
+        )
+        self.updateCheckFlowCoordinator = updateCheckFlowCoordinator ?? defaultUpdateFlow
+        self.profileSettingsTransferCoordinator = profileSettingsTransferCoordinator ?? ProfileSettingsTransferCoordinator(
+            transferService: .init(),
+            fileDialogs: fileDialogService,
+            fileIO: fileReadWriter
+        )
+        self.debugLogExportCoordinator = debugLogExportCoordinator ?? DebugLogExportCoordinator(
+            diagnosticsCoordinator: .init(),
+            fileDialogs: fileDialogService,
+            fileIO: fileReadWriter
+        )
+        self.systemAudioMonitor = systemAudioMonitor ?? SystemAudioMonitor()
+        let persistedState = self.settingsRepository.loadState()
+        perDeviceSnapshotService = PerDeviceSnapshotService(
+            settingsStore: self.settingsStore,
+            snapshots: persistedState.perDeviceSoundSnapshots,
+            boosts: persistedState.outputDeviceBoosts
+        )
         hasPersistedPrimarySettings = persistedState.hasPrimaryPersistedSettings
         restorePersistedState(persistedState)
         configureSoundEngine()
@@ -259,51 +338,50 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func restorePersistedState(_ state: SettingsRepository.State) {
+        let plan = PersistedStateCoordinator.makePlan(from: state)
         isRestoringPersistedState = true
-        isEnabled = state.isEnabled
-        volume = state.volume
-        variation = state.variation
-        pitchVariation = state.pitchVariation
-        playKeyUp = state.playKeyUp
-        pressLevel = state.pressLevel
-        releaseLevel = state.releaseLevel
-        spaceLevel = state.spaceLevel
-        autoProfileTuningEnabled = state.autoProfileTuningEnabled
-        selectedProfile = state.selectedProfile
-        launchAtLogin = state.launchAtLogin
-        dynamicCompensationEnabled = state.dynamicCompensationEnabled
-        compensationStrength = state.compensationStrength
-        levelMacLow = state.levelMacLow
-        levelKbdLow = state.levelKbdLow
-        levelMacLowMid = state.levelMacLowMid
-        levelKbdLowMid = state.levelKbdLowMid
-        levelMacMid = state.levelMacMid
-        levelKbdMid = state.levelKbdMid
-        levelMacHighMid = state.levelMacHighMid
-        levelKbdHighMid = state.levelKbdHighMid
-        levelMacHigh = state.levelMacHigh
-        levelKbdHigh = state.levelKbdHigh
-        strictVolumeNormalizationEnabled = state.strictVolumeNormalizationEnabled
-        levelTuningMode = state.levelTuningMode
-        autoNormalizeTargetAt100 = state.autoNormalizeTargetAt100
-        typingAdaptiveEnabled = state.typingAdaptiveEnabled
-        stackModeEnabled = state.stackModeEnabled
-        stackDensity = state.stackDensity
-        layerThresholdSlam = state.layerThresholdSlam
-        layerThresholdHard = state.layerThresholdHard
-        layerThresholdMedium = state.layerThresholdMedium
-        minInterKeyGapMs = state.minInterKeyGapMs
-        releaseDuckingStrength = state.releaseDuckingStrength
-        releaseDuckingWindowMs = state.releaseDuckingWindowMs
-        releaseTailTightness = state.releaseTailTightness
-        limiterEnabled = state.limiterEnabled
-        limiterDrive = state.limiterDrive
-        outputDeviceBoosts = state.outputDeviceBoosts
-        perDeviceSoundSnapshots = state.perDeviceSoundSnapshots
-        autoOutputPresetEnabled = state.autoOutputPresetEnabled
-        perDeviceSoundProfileEnabled = state.perDeviceSoundProfileEnabled
-        appearanceMode = state.appearanceMode
+        isEnabled = plan.isEnabled
+        applyPersistedSoundState(plan.sound)
+        applyPersistedCompensationState(plan.compensation)
+        applyPersistedSystemState(plan.system)
         isRestoringPersistedState = false
+    }
+
+    private func applyPersistedSoundState(_ plan: PersistedSoundStatePlan) {
+        selectedProfile = plan.selectedProfile
+        playKeyUp = plan.playKeyUp
+        autoProfileTuningEnabled = plan.autoProfileTuningEnabled
+        applySoundSettings(plan.soundSettings)
+        stackDensity = plan.stackDensity
+        layerThresholdSlam = plan.layerThresholdSlam
+        layerThresholdHard = plan.layerThresholdHard
+        layerThresholdMedium = plan.layerThresholdMedium
+    }
+
+    private func applyPersistedCompensationState(_ plan: PersistedCompensationStatePlan) {
+        dynamicCompensationEnabled = plan.dynamicCompensationEnabled
+        compensationStrength = plan.compensationStrength
+        levelMacLow = plan.levelMacLow
+        levelKbdLow = plan.levelKbdLow
+        levelMacLowMid = plan.levelMacLowMid
+        levelKbdLowMid = plan.levelKbdLowMid
+        levelMacMid = plan.levelMacMid
+        levelKbdMid = plan.levelKbdMid
+        levelMacHighMid = plan.levelMacHighMid
+        levelKbdHighMid = plan.levelKbdHighMid
+        levelMacHigh = plan.levelMacHigh
+        levelKbdHigh = plan.levelKbdHigh
+        strictVolumeNormalizationEnabled = plan.strictVolumeNormalizationEnabled
+        levelTuningMode = plan.levelTuningMode
+        autoNormalizeTargetAt100 = plan.autoNormalizeTargetAt100
+        typingAdaptiveEnabled = plan.typingAdaptiveEnabled
+    }
+
+    private func applyPersistedSystemState(_ plan: PersistedSystemStatePlan) {
+        launchAtLogin = plan.launchAtLogin
+        autoOutputPresetEnabled = plan.autoOutputPresetEnabled
+        perDeviceSoundProfileEnabled = plan.perDeviceSoundProfileEnabled
+        appearanceMode = plan.appearanceMode
     }
 
     private func configureSoundEngine() {
@@ -353,14 +431,22 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func configureEventTap() {
-        eventTap.onEvent = { [weak self] type, keyCode, isAutorepeat in
-            guard let self, self.isEnabled else { return }
-            self.lastInputEventAt = CFAbsoluteTimeGetCurrent()
-            if type == .down {
-                if isAutorepeat { return }
+        inputMonitor.setEventHandler { [weak self] type, keyCode, isAutorepeat in
+            guard let self else { return }
+            let plan = KeyboardInputEventCoordinator.makePlan(KeyboardInputEventContext(
+                isEnabled: self.isEnabled,
+                playKeyUp: self.playKeyUp,
+                type: type,
+                keyCode: keyCode,
+                isAutorepeat: isAutorepeat
+            ))
+            if plan.shouldTrackTyping {
                 self.trackTypingHit()
+            }
+            if plan.shouldPlayDown {
                 self.soundEngine.playDown(for: keyCode, autorepeat: isAutorepeat)
-            } else if self.playKeyUp {
+            }
+            if plan.shouldPlayUp {
                 self.soundEngine.playUp(for: keyCode)
             }
         }
@@ -386,9 +472,19 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func syncSoundScalar(_ value: Double, key: String, apply: (Float) -> Void) {
-        defaults.set(value, forKey: key)
+        settingsStore.set(value, forKey: key)
         apply(Float(value))
         persistPerDeviceSnapshotIfNeeded()
+    }
+
+    private func syncSettingFlag(_ value: Bool, key: String, after: (() -> Void)? = nil) {
+        settingsStore.set(value, forKey: key)
+        after?()
+    }
+
+    private func syncSettingString(_ value: String, key: String, after: (() -> Void)? = nil) {
+        settingsStore.set(value, forKey: key)
+        after?()
     }
 
     private func syncClampedSoundScalar(
@@ -399,42 +495,42 @@ final class KeyboardSoundService: ObservableObject {
         afterApply: (() -> Void)? = nil
     ) {
         let clamped = value.clamped(to: range)
-        defaults.set(clamped, forKey: key)
+        settingsStore.set(clamped, forKey: key)
         apply(Float(clamped))
         afterApply?()
         persistPerDeviceSnapshotIfNeeded()
     }
 
     private func syncSoundFlag(_ value: Bool, key: String, apply: (Bool) -> Void) {
-        defaults.set(value, forKey: key)
+        settingsStore.set(value, forKey: key)
         apply(value)
         persistPerDeviceSnapshotIfNeeded()
     }
 
     private func syncCompensationScalar(_ value: Double, key: String, clampedTo range: ClosedRange<Double>? = nil) {
         let persisted = range.map { value.clamped(to: $0) } ?? value
-        defaults.set(persisted, forKey: key)
+        settingsStore.set(persisted, forKey: key)
         updateDynamicCompensation()
     }
 
     private func syncCompensationMode(_ rawValue: String, key: String) {
-        defaults.set(rawValue, forKey: key)
+        settingsStore.set(rawValue, forKey: key)
         updateDynamicCompensation()
     }
 
     private func syncLayerThreshold(_ value: Double, key: String) {
-        defaults.set(value, forKey: key)
+        settingsStore.set(value, forKey: key)
         applyLayerThresholds()
     }
 
     private func syncDynamicCompensationFlag(_ enabled: Bool, key: String) {
-        defaults.set(enabled, forKey: key)
+        settingsStore.set(enabled, forKey: key)
         updateSystemVolumeMonitoringState()
         updateDynamicCompensation()
     }
 
     private func syncStrictNormalizationFlag(_ enabled: Bool, key: String) {
-        defaults.set(enabled, forKey: key)
+        settingsStore.set(enabled, forKey: key)
         soundEngine.strictLevelingEnabled = enabled
         updateDynamicCompensation()
         updateTypingDecayMonitoringState()
@@ -442,13 +538,13 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func syncTypingAdaptationFlag(_ enabled: Bool, key: String) {
-        defaults.set(enabled, forKey: key)
+        settingsStore.set(enabled, forKey: key)
         updateTypingDecayMonitoringState()
         updateTypingAdaptation()
     }
 
     private func syncLaunchAtLoginFlag(_ enabled: Bool, key: String) {
-        defaults.set(enabled, forKey: key)
+        settingsStore.set(enabled, forKey: key)
         updateLaunchAtLogin()
     }
 
@@ -458,7 +554,7 @@ final class KeyboardSoundService: ObservableObject {
             applyProfileSoundPreset(for: profile)
         }
         if !isRestoringPersistedState {
-            defaults.set(profile.rawValue, forKey: SettingsKeys.selectedProfile)
+            settingsStore.set(profile.rawValue, forKey: SettingsKeys.selectedProfile)
         }
     }
 
@@ -467,47 +563,49 @@ final class KeyboardSoundService: ObservableObject {
         // User can trigger an explicit prompt via the "Проверить" action.
         refreshAccessibilityStatus(promptIfNeeded: false)
         soundEngine.startIfNeeded()
-        capturingKeyboard = eventTap.start()
+        capturingKeyboard = inputMonitor.start()
         recordDebug("Keyboard capture started. capturing=\(capturingKeyboard), ax=\(accessibilityGranted), input=\(inputMonitoringGranted)")
     }
 
     func stop() {
-        eventTap.stop()
+        inputMonitor.stop()
         soundEngine.stop()
         capturingKeyboard = false
         recordDebug("Keyboard capture stopped")
     }
 
     func refreshAccessibilityStatus(promptIfNeeded: Bool) {
-        let status = PermissionsService.refreshStatus(promptIfNeeded: promptIfNeeded)
+        let status = permissionsController.refreshStatus(promptIfNeeded: promptIfNeeded)
         accessibilityGranted = status.accessibilityGranted
         inputMonitoringGranted = status.inputMonitoringGranted
         if isEnabled {
             soundEngine.startIfNeeded()
-            capturingKeyboard = eventTap.start()
+            capturingKeyboard = inputMonitor.start()
         }
         recordDebug("Privacy status refreshed. ax=\(accessibilityGranted), input=\(inputMonitoringGranted), capturing=\(capturingKeyboard)")
     }
 
     func openAccessibilitySettings() {
-        PermissionsService.openAccessibilitySettings()
+        permissionsController.openAccessibilitySettings()
     }
 
     func openInputMonitoringSettings() {
-        PermissionsService.openInputMonitoringSettings()
+        permissionsController.openInputMonitoringSettings()
     }
 
     func resetPrivacyPermissions() {
-        guard let bundleID = AppMetadataService.resolveBundleIdentifier() else {
+        guard let bundleID = appMetadataProvider.resolveBundleIdentifier() else {
             NSLog("Unable to resolve bundle identifier for TCC reset")
             return
         }
-        PermissionsService.resetTCC(service: "Accessibility", bundleID: bundleID)
-        PermissionsService.resetTCC(service: "ListenEvent", bundleID: bundleID)
+        let plan = AccessRecoveryPlanCoordinator.makePlan()
+        for service in plan.tccServicesToReset {
+            permissionsController.resetTCC(service: service, bundleID: bundleID)
+        }
         openAccessibilitySettings()
         openInputMonitoringSettings()
-        accessActionHint = "Доступы сброшены. Включи Klac в Универсальном доступе и Мониторинге ввода, затем перезапусти приложение."
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+        accessActionHint = plan.postResetHint
+        accessRecoveryCoordinator.schedulePostResetRefresh { [weak self] in
             self?.refreshAccessibilityStatus(promptIfNeeded: false)
         }
         recordDebug("Privacy permissions reset for bundleID=\(bundleID)")
@@ -516,47 +614,21 @@ final class KeyboardSoundService: ObservableObject {
     func runAccessRecoveryWizard() {
         resetPrivacyPermissions()
         recordDebug("Access recovery wizard started")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        let plan = AccessRecoveryPlanCoordinator.makePlan()
+        accessRecoveryCoordinator.scheduleWizard(openSettings: { [weak self] in
             self?.openAccessibilitySettings()
             self?.openInputMonitoringSettings()
-            self?.accessActionHint = "Открыл Универсальный доступ и Мониторинг ввода. После перезапуска включи Klac в обоих списках."
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { [weak self] in
+        }, setHint: { [weak self] in
+            self?.accessActionHint = plan.wizardHint
+        }, restart: { [weak self] in
             self?.restartApplication()
-        }
+        })
     }
 
     func restartApplication() {
-        if let appURL = AppMetadataService.resolveAppBundleURL() {
-            let config = NSWorkspace.OpenConfiguration()
-            config.activates = false
-            config.createsNewApplicationInstance = true
-            NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, error in
-                if let error {
-                    NSLog("Primary relaunch failed: \(error). Falling back to detached open.")
-                    DispatchQueue.main.async { [weak self] in
-                        self?.relaunchWithDetachedOpen(appURL: appURL)
-                    }
-                    return
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                    NSApplication.shared.terminate(nil)
-                }
-            }
-            return
-        }
-
-        // Development run (e.g. `swift run`) without a .app bundle.
-        guard let executableURL = Bundle.main.executableURL else {
-            NSLog("Failed to resolve app bundle or executable URL for relaunch")
-            return
-        }
-        if relaunchWithDetachedExecutable(executableURL: executableURL) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                NSApplication.shared.terminate(nil)
-            }
-        } else {
-            accessActionHint = "Не удалось автоматом перезапустить dev-сборку. Закрой приложение и запусти снова через swift run."
+        let plan = AccessRecoveryPlanCoordinator.makePlan()
+        appRestartController.restartApplication { [weak self] in
+            self?.accessActionHint = plan.restartFailureHint
         }
     }
 
@@ -570,84 +642,19 @@ final class KeyboardSoundService: ObservableObject {
             guard let self else { return }
             defer { self.updateCheckInProgress = false }
 
-            do {
-                let currentVersion = AppMetadataService.currentAppVersion()
-                let currentBuild = AppMetadataService.currentAppBuildNumber()
-                let result = try await self.updateCheckService.check(
-                    currentVersion: currentVersion,
-                    currentBuild: currentBuild
-                )
-
-                switch result {
-                case .upToDate:
-                    self.updateStatusText = "У вас актуальная версия (\(currentVersion))."
-                    self.recordDebug("Update check: already up to date (\(currentVersion))")
-                    self.presentInfoAlert(
-                        title: "Обновлений нет",
-                        message: "Текущая версия \(currentVersion) уже актуальна."
-                    )
-                case .invalidReleaseLink(let latestVersion):
-                    self.updateStatusText = "Некорректная ссылка релиза."
-                    self.recordDebug("Update check: invalid release URL for \(latestVersion)")
-                    self.presentInfoAlert(
-                        title: "Обновление недоступно",
-                        message: "Новая версия \(latestVersion) найдена, но ссылка на релиз некорректна."
-                    )
-                case .updateAvailable(let latestVersion, let releaseURL):
-                    self.updateStatusText = "Найдена версия \(latestVersion). Открываю релиз..."
-                    self.recordDebug("Update check: newer version found \(latestVersion), opening release page")
-                    NSWorkspace.shared.open(releaseURL)
-                }
-            } catch {
-                self.updateStatusText = "Ошибка обновления: \(error.localizedDescription)"
-                self.recordDebug("Update check failed: \(error.localizedDescription)")
-                self.presentInfoAlert(
-                    title: "Ошибка обновления",
-                    message: error.localizedDescription
-                )
-            }
-        }
-    }
-
-    private func presentInfoAlert(title: String, message: String) {
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = title
-        alert.informativeText = message
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
-
-    private func relaunchWithDetachedOpen(appURL: URL) {
-        let escapedPath = appURL.path.replacingOccurrences(of: "'", with: "'\\''")
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
-        process.arguments = ["/bin/sh", "-c", "sleep 0.35; /usr/bin/open -n '\(escapedPath)'"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                NSApplication.shared.terminate(nil)
-            }
-        } catch {
-            NSLog("Detached relaunch failed: \(error)")
-        }
-    }
-
-    private func relaunchWithDetachedExecutable(executableURL: URL) -> Bool {
-        let escapedPath = executableURL.path.replacingOccurrences(of: "'", with: "'\\''")
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
-        process.arguments = ["/bin/sh", "-c", "sleep 0.35; '\(escapedPath)' >/dev/null 2>&1 &"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            return true
-        } catch {
-            NSLog("Detached executable relaunch failed: \(error)")
-            return false
+            let currentVersion = self.appMetadataProvider.currentAppVersion()
+            let currentBuild = self.appMetadataProvider.currentAppBuildNumber()
+            let presentation = await self.updateCheckFlowCoordinator.run(
+                currentVersion: currentVersion,
+                currentBuild: currentBuild
+            )
+            self.updateStatusText = presentation.statusText
+            self.recordDebug(presentation.debugMessage)
+            UpdateCheckActionExecutor.execute(
+                presentation.action,
+                alertPresenter: self.alertPresenter,
+                urlOpener: self.urlOpener
+            )
         }
     }
 
@@ -678,16 +685,21 @@ final class KeyboardSoundService: ObservableObject {
         recordDebug("Stress test started. duration=\(Int(effectiveDuration))s, routeSimulation=\(includeOutputRouteSimulation)")
 
         let originalProfile = selectedProfile
-
-        if selectedProfile == .customPack {
-            selectedProfile = .kalihBoxWhite
+        let profilePlan = StressProfileTransitionCoordinator.prepare(
+            currentProfile: selectedProfile,
+            fallbackProfile: .kalihBoxWhite
+        )
+        if profilePlan.switchedFromOriginal {
+            selectedProfile = profilePlan.effectiveProfile
             recordDebug("Stress test switched profile customPack -> kalihBoxWhite (to guarantee playable samples)")
         }
         start()
         soundEngine.startIfNeeded()
 
         defer {
-            if selectedProfile != originalProfile {
+            if StressProfileTransitionCoordinator.shouldRestoreOriginal(switchedFromOriginal: profilePlan.switchedFromOriginal),
+               selectedProfile != originalProfile
+            {
                 selectedProfile = originalProfile
                 recordDebug("Stress test restored profile to \(originalProfile.rawValue)")
             }
@@ -728,12 +740,11 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func applyProfileSoundPreset(for profile: SoundProfile) {
-        guard let preset = SoundPresetService.profilePreset(for: profile) else {
-            profilePresetLastApplied = "Базовый пресет"
-            return
+        let decision = ProfilePresetCoordinator.decide(for: profile)
+        if let settings = decision.settings {
+            applySoundSettings(settings)
         }
-        applySoundSettings(preset.settings)
-        profilePresetLastApplied = preset.label
+        profilePresetLastApplied = decision.label
     }
 
     private func applySoundSettings(_ settings: SoundSettings) {
@@ -845,15 +856,8 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     func exportSettings() {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "klac-profile.json"
-        panel.title = "Экспорт настроек профиля"
-        panel.message = "Сохранить текущие настройки звука"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        let snapshot = SettingsSnapshot(
-            profile: selectedProfile.rawValue,
+        let state = ProfileSettingsState(
+            selectedProfile: selectedProfile,
             volume: volume,
             variation: variation,
             playKeyUp: playKeyUp,
@@ -861,76 +865,73 @@ final class KeyboardSoundService: ObservableObject {
             releaseLevel: releaseLevel,
             spaceLevel: spaceLevel
         )
-        do {
-            let data = try JSONEncoder().encode(snapshot)
-            try data.write(to: url, options: .atomic)
-            recordDebug("Settings exported: \(url.path)")
-        } catch {
-            recordDebug("Failed to export settings: \(error.localizedDescription)")
+        switch profileSettingsTransferCoordinator.exportSettings(from: state) {
+        case .cancelled:
+            break
+        case let .success(path):
+            recordDebug("Settings exported: \(path)")
+        case let .failure(message):
+            recordDebug("Failed to export settings: \(message)")
         }
     }
 
     func importSettings() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.title = "Импорт настроек профиля"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        do {
-            let data = try Data(contentsOf: url)
-            let snapshot = try JSONDecoder().decode(SettingsSnapshot.self, from: data)
-            if let profile = SoundProfile(rawValue: snapshot.profile) {
-                selectedProfile = profile
+        let (result, importedState) = profileSettingsTransferCoordinator.importSettings(fallbackProfile: selectedProfile)
+        switch result {
+        case .cancelled:
+            break
+        case let .success(path):
+            if let importedState {
+                applyImportedProfileSettings(importedState)
             }
-            volume = snapshot.volume.clamped(to: 0.0 ... 1.0)
-            variation = snapshot.variation.clamped(to: 0.0 ... 1.0)
-            playKeyUp = snapshot.playKeyUp
-            pressLevel = snapshot.pressLevel.clamped(to: 0.2 ... 1.6)
-            releaseLevel = snapshot.releaseLevel.clamped(to: 0.1 ... 1.4)
-            spaceLevel = snapshot.spaceLevel.clamped(to: 0.2 ... 1.8)
-            recordDebug("Settings imported: \(url.path)")
-        } catch {
-            recordDebug("Failed to import settings: \(error.localizedDescription)")
+            recordDebug("Settings imported: \(path)")
+        case let .failure(message):
+            recordDebug("Failed to import settings: \(message)")
         }
+    }
+
+    private func applyImportedProfileSettings(_ state: ProfileSettingsState) {
+        applySoundStatePatch(SoundStatePatchMapper.importedProfilePatch(from: state))
     }
 
     func clearDebugLog() {
         debugLogService.clear()
-        debugLogLines = debugLogService.lines
         debugLogPreview = "Лог очищен."
         recordDebug("Debug log cleared")
     }
 
     func exportDebugLog() {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.plainText]
-        panel.nameFieldStringValue = "klac-debug-\(Self.fileTimestamp()).log"
-        panel.title = "Экспорт debug-логов"
-        panel.message = "Сохранить диагностический лог приложения"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        let report = buildDebugReport()
-        do {
-            try report.write(to: url, atomically: true, encoding: .utf8)
-            recordDebug("Debug log exported: \(url.path)")
-        } catch {
-            recordDebug("Failed to export debug log: \(error.localizedDescription)")
+        let runtimeContext = DiagnosticsRuntimeContextMapper.map(DiagnosticsRuntimeContextInput(
+            outputDeviceName: currentOutputDeviceName,
+            outputUID: currentOutputDeviceUID,
+            accessibilityGranted: accessibilityGranted,
+            inputMonitoringGranted: inputMonitoringGranted,
+            capturingKeyboard: capturingKeyboard,
+            systemVolumeAvailable: detectedSystemVolumeAvailable,
+            systemVolumePercent: detectedSystemVolumePercent,
+            runtimeSettings: snapshotSummaryLines(),
+            stressTestStatus: stressTestStatus
+        ))
+        let runtimeSnapshot = diagnosticsSnapshotFactory.makeSnapshot(context: runtimeContext)
+        switch debugLogExportCoordinator.exportDebugLog(
+            runtimeSnapshot: runtimeSnapshot,
+            debugLogService: debugLogService,
+            defaultFileName: "klac-debug-\(DiagnosticsTimestampProvider.fileTimestamp()).log"
+        ) {
+        case .cancelled:
+            break
+        case let .success(path):
+            recordDebug("Debug log exported: \(path)")
+        case let .failure(message):
+            recordDebug("Failed to export debug log: \(message)")
         }
     }
 
     private func updateLaunchAtLogin() {
         do {
-            try LaunchAtLoginService.setEnabled(launchAtLogin)
+            try launchAtLoginController.setEnabled(launchAtLogin)
         } catch {
             NSLog("Failed to update launch at login: \(error)")
-        }
-    }
-
-    private func startSystemVolumeMonitoring(interval: TimeInterval) {
-        systemAudioMonitor.start(interval: interval) { [weak self] payload in
-            self?.handleSystemAudioPoll(payload)
         }
     }
 
@@ -943,55 +944,31 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func handleSystemAudioPoll(_ payload: SystemAudioPollPayload) {
-        let wasVolumeAvailable = detectedSystemVolumeAvailable
-        detectedSystemVolumeAvailable = payload.scalar != nil
-        if let scalar = payload.scalar {
-            detectedSystemVolumePercent = scalar * 100.0
-        }
+        let pollState = SystemAudioPollState(
+            detectedSystemVolumeAvailable: detectedSystemVolumeAvailable,
+            detectedSystemVolumePercent: detectedSystemVolumePercent,
+            lastSystemVolume: lastSystemVolume,
+            lastOutputDeviceID: lastOutputDeviceID,
+            currentOutputDeviceUID: currentOutputDeviceUID,
+            currentOutputDeviceName: currentOutputDeviceName,
+            initialOutputDeviceResolved: initialOutputDeviceResolved
+        )
+        let result = SystemAudioPollCoordinator.process(payload: payload, state: pollState)
 
-        let nextVolume = payload.scalar ?? lastSystemVolume
-        let volumeChanged = abs(lastSystemVolume - nextVolume) > 0.005
-        if volumeChanged {
-            lastSystemVolume = nextVolume
-        }
+        detectedSystemVolumeAvailable = result.state.detectedSystemVolumeAvailable
+        detectedSystemVolumePercent = result.state.detectedSystemVolumePercent
+        lastSystemVolume = result.state.lastSystemVolume
+        lastOutputDeviceID = result.state.lastOutputDeviceID
+        currentOutputDeviceUID = result.state.currentOutputDeviceUID
+        currentOutputDeviceName = result.state.currentOutputDeviceName
+        initialOutputDeviceResolved = result.state.initialOutputDeviceResolved
 
-        let deviceID = payload.deviceID
-        let deviceUID = payload.deviceUID
-        let deviceName = payload.deviceName
-        let deviceChanged = deviceID != lastOutputDeviceID || deviceUID != currentOutputDeviceUID
+        let volumeChanged = result.volumeChanged
+        let availabilityChanged = result.availabilityChanged
+        let deviceChanged = result.deviceChanged
         if deviceChanged {
-            let isInitialProbe = !initialOutputDeviceResolved
-            let previousUID = currentOutputDeviceUID
-            if perDeviceSoundProfileEnabled, !previousUID.isEmpty {
-                saveSnapshot(for: previousUID)
-            }
-            lastOutputDeviceID = deviceID
-            currentOutputDeviceUID = deviceUID
-            currentOutputDeviceName = deviceName
-            currentOutputDeviceBoost = outputDeviceBoosts[deviceUID] ?? 1.0
-            soundEngine.handleOutputDeviceChanged()
-            var restored = false
-            if perDeviceSoundProfileEnabled, !deviceUID.isEmpty {
-                restored = restoreSnapshot(for: deviceUID)
-            }
-            if !restored {
-                let shouldApplyAutoPreset = !isInitialProbe || !hasPersistedPrimarySettings
-                if shouldApplyAutoPreset {
-                    applyAutoOutputPresetIfNeeded(deviceUID: deviceUID, deviceName: deviceName)
-                } else {
-                    autoOutputPresetLastApplied = "Сохраненные настройки"
-                }
-                if perDeviceSoundProfileEnabled, !deviceUID.isEmpty {
-                    saveSnapshot(for: deviceUID)
-                }
-            } else {
-                autoOutputPresetLastApplied = "Профиль устройства"
-            }
-            initialOutputDeviceResolved = true
-            recordDebug("Output device changed: \(deviceName) [uid=\(deviceUID.isEmpty ? "n/a" : deviceUID)]")
+            handleOutputDeviceTransition(result: result)
         }
-
-        let availabilityChanged = wasVolumeAvailable != detectedSystemVolumeAvailable
         if availabilityChanged && !deviceChanged {
             soundEngine.handleOutputDeviceChanged()
             recordDebug("Output stream availability changed. Rebuilt audio graph")
@@ -1000,6 +977,45 @@ final class KeyboardSoundService: ObservableObject {
         if volumeChanged || deviceChanged || availabilityChanged {
             updateDynamicCompensation()
         }
+    }
+
+    private func handleOutputDeviceTransition(result: SystemAudioPollResult) {
+        let deviceUID = result.deviceUID
+        let deviceName = result.deviceName
+        let transitionContext = OutputDeviceTransitionContext(
+            perDeviceSoundProfileEnabled: perDeviceSoundProfileEnabled,
+            previousDeviceUID: result.previousDeviceUID,
+            newDeviceUID: deviceUID,
+            isInitialProbe: result.isInitialProbe,
+            hasPersistedPrimarySettings: hasPersistedPrimarySettings
+        )
+        let beginPlan = OutputDeviceTransitionCoordinator.beginPlan(for: transitionContext)
+        if beginPlan.shouldSavePreviousSnapshot {
+            saveSnapshot(for: result.previousDeviceUID)
+        }
+        currentOutputDeviceBoost = perDeviceSnapshotService.boost(for: deviceUID)
+        soundEngine.handleOutputDeviceChanged()
+        var restored = false
+        if beginPlan.shouldAttemptRestoreSnapshot {
+            restored = restoreSnapshot(for: deviceUID)
+        }
+        let finalizePlan = OutputDeviceTransitionCoordinator.finalizePlan(
+            for: transitionContext,
+            restoredSnapshot: restored
+        )
+        switch finalizePlan.presetAction {
+        case .applyAutoPreset:
+            applyAutoOutputPresetIfNeeded(deviceUID: deviceUID, deviceName: deviceName)
+        case .markSavedSettings, .markDeviceProfile:
+            break
+        }
+        if let statusLabel = finalizePlan.statusLabel {
+            autoOutputPresetLastApplied = statusLabel
+        }
+        if finalizePlan.shouldSaveNewSnapshot {
+            saveSnapshot(for: deviceUID)
+        }
+        recordDebug("Output device changed: \(deviceName) [uid=\(deviceUID.isEmpty ? "n/a" : deviceUID)]")
     }
 
     private func startFailSafeMonitoring() {
@@ -1018,40 +1034,52 @@ final class KeyboardSoundService: ObservableObject {
             recordDebug("Fail-safe: reset stuck system-volume poll (>6.0s)")
         }
 
-        if isEnabled, !capturingKeyboard, accessibilityGranted, inputMonitoringGranted {
-            let restarted = eventTap.start()
+        let plan = FailSafeTickCoordinator.makePlan(
+            isEnabled: isEnabled,
+            currentlyCapturingKeyboard: capturingKeyboard,
+            accessibilityGranted: accessibilityGranted,
+            inputMonitoringGranted: inputMonitoringGranted
+        )
+
+        if plan.shouldAttemptKeyboardRecovery {
+            let restarted = inputMonitor.recoverIfNeeded(
+                isEnabled: isEnabled,
+                accessibilityGranted: accessibilityGranted,
+                inputMonitoringGranted: inputMonitoringGranted,
+                currentlyCapturing: capturingKeyboard
+            )
             capturingKeyboard = restarted
             if restarted {
                 recordDebug("Fail-safe: keyboard capture auto-restarted")
             }
         }
 
-        if isEnabled {
+        if plan.shouldRunAudioEngineFailSafe {
             soundEngine.runFailSafeTick()
         }
     }
 
     private func updateDynamicCompensation() {
-        var gain: Double
-        if strictVolumeNormalizationEnabled {
-            if levelTuningMode == .simple {
-                gain = AudioCompensationMath.autoInverseGain(
-                    systemVolumeScalar: lastSystemVolume,
-                    targetAt100: autoNormalizeTargetAt100
-                )
-            } else {
-                gain = strictCurveGain(systemVolume: lastSystemVolume)
-            }
-        } else {
-            gain = curveGainAt(systemVolume: lastSystemVolume)
-        }
-        gain *= currentOutputDeviceBoost
-
-        if dynamicCompensationEnabled && !strictVolumeNormalizationEnabled {
-            let lowVolumeFactor = max(0.0, 1.0 - lastSystemVolume)
-            gain *= 1.0 + lowVolumeFactor * (0.18 + compensationStrength * 0.95)
-        }
-
+        let input = DynamicCompensationInput(
+            strictVolumeNormalizationEnabled: strictVolumeNormalizationEnabled,
+            levelTuningMode: levelTuningMode,
+            lastSystemVolume: lastSystemVolume,
+            autoNormalizeTargetAt100: autoNormalizeTargetAt100,
+            levelMacLow: levelMacLow,
+            levelKbdLow: levelKbdLow,
+            levelMacLowMid: levelMacLowMid,
+            levelKbdLowMid: levelKbdLowMid,
+            levelMacMid: levelMacMid,
+            levelKbdMid: levelKbdMid,
+            levelMacHighMid: levelMacHighMid,
+            levelKbdHighMid: levelKbdHighMid,
+            levelMacHigh: levelMacHigh,
+            levelKbdHigh: levelKbdHigh,
+            dynamicCompensationEnabled: dynamicCompensationEnabled,
+            compensationStrength: compensationStrength,
+            currentOutputDeviceBoost: currentOutputDeviceBoost
+        )
+        let gain = DynamicCompensationCoordinator.resolveGain(input)
         let clamped = Float(gain).clamped(to: 0.20 ... 6.0)
         soundEngine.dynamicCompensationGain = clamped
         let next = Double(clamped)
@@ -1061,7 +1089,7 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func curveGainAt(systemVolume: Double) -> Double {
-        Self.curveGain(
+        CompensationCurveCoordinator.curveGain(
             systemVolume: systemVolume,
             macLow: levelMacLow,
             kbdLow: levelKbdLow,
@@ -1077,11 +1105,20 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func strictCurveGain(systemVolume: Double) -> Double {
-        let base = curveGainAt(systemVolume: systemVolume)
-        let at100 = max(0.001, curveGainAt(systemVolume: 1.0))
-        let target = autoNormalizeTargetAt100.clamped(to: 0.20 ... 1.20)
-        let scale = target / at100
-        return (base * scale).clamped(to: 0.20 ... 12.0)
+        CompensationCurveCoordinator.strictCurveGain(
+            systemVolume: systemVolume,
+            targetAt100: autoNormalizeTargetAt100,
+            macLow: levelMacLow,
+            kbdLow: levelKbdLow,
+            macLowMid: levelMacLowMid,
+            kbdLowMid: levelKbdLowMid,
+            macMid: levelMacMid,
+            kbdMid: levelKbdMid,
+            macHighMid: levelMacHighMid,
+            kbdHighMid: levelKbdHighMid,
+            macHigh: levelMacHigh,
+            kbdHigh: levelKbdHigh
+        )
     }
 
     private func applyLayerThresholds() {
@@ -1092,17 +1129,27 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func applyAutoOutputPresetIfNeeded(deviceUID: String, deviceName: String) {
-        guard autoOutputPresetEnabled else { return }
-        guard !deviceUID.isEmpty else { return }
-        guard deviceUID != lastAutoPresetDeviceUID else { return }
-        lastAutoPresetDeviceUID = deviceUID
+        let decision = AutoOutputPresetCoordinator.decide(
+            autoOutputPresetEnabled: autoOutputPresetEnabled,
+            deviceUID: deviceUID,
+            lastAutoPresetDeviceUID: lastAutoPresetDeviceUID,
+            deviceName: deviceName
+        )
+        guard decision.shouldApply else { return }
 
-        if OutputDeviceClassifier.looksLikeHeadphones(deviceName) {
+        if let nextUID = decision.nextLastAutoPresetDeviceUID {
+            lastAutoPresetDeviceUID = nextUID
+        }
+
+        switch decision.presetKind {
+        case .headphones:
             applyHeadphonesPreset()
             autoOutputPresetLastApplied = "Наушники"
-        } else {
+        case .speakers:
             applySpeakersPreset()
             autoOutputPresetLastApplied = "Динамики"
+        case .none:
+            return
         }
         recordDebug("Auto output preset applied: \(autoOutputPresetLastApplied) for \(deviceName)")
     }
@@ -1119,29 +1166,6 @@ final class KeyboardSoundService: ObservableObject {
             return strictCurveGain(systemVolume: normalized)
         }
         return curveGainAt(systemVolume: normalized)
-    }
-
-    nonisolated private static func curveGain(
-        systemVolume: Double,
-        macLow: Double,
-        kbdLow: Double,
-        macLowMid: Double,
-        kbdLowMid: Double,
-        macMid: Double,
-        kbdMid: Double,
-        macHighMid: Double,
-        kbdHighMid: Double,
-        macHigh: Double,
-        kbdHigh: Double
-    ) -> Double {
-        let points = [
-            GainCurvePoint(x: macLow.clamped(to: 0.05 ... 0.90), y: kbdLow.clamped(to: 0.20 ... 4.00)),
-            GainCurvePoint(x: macLowMid.clamped(to: 0.08 ... 0.93), y: kbdLowMid.clamped(to: 0.20 ... 4.00)),
-            GainCurvePoint(x: macMid.clamped(to: 0.05 ... 0.95), y: kbdMid.clamped(to: 0.20 ... 4.00)),
-            GainCurvePoint(x: macHighMid.clamped(to: 0.10 ... 0.98), y: kbdHighMid.clamped(to: 0.20 ... 4.00)),
-            GainCurvePoint(x: macHigh.clamped(to: 0.10 ... 1.00), y: kbdHigh.clamped(to: 0.20 ... 4.00))
-        ]
-        return AudioCompensationMath.curveGain(systemVolume: systemVolume, points: points)
     }
 
     private func trackTypingHit() {
@@ -1170,49 +1194,23 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func updateTypingAdaptation() {
-        if strictVolumeNormalizationEnabled {
-            soundEngine.typingSpeedGain = 1.0
-            liveTypingGain = 1.0
-            return
-        }
-        guard typingAdaptiveEnabled else {
-            soundEngine.typingSpeedGain = 1.0
-            liveTypingGain = 1.0
-            return
-        }
-        // Fully automatic adaptation to personal typing speed.
-        let target = max(2.5, typingMetricsService.personalBaselineCPS * 1.1)
-        let normalized = (typingCPS / target).clamped(to: 0.0 ... 1.6)
-        let gain = 1.0 + 0.25 + normalized * 0.95
-        let clamped = gain.clamped(to: 1.0 ... 2.5)
-        soundEngine.typingSpeedGain = Float(clamped)
-        if abs(liveTypingGain - clamped) > 0.005 {
-            liveTypingGain = clamped
-        }
-    }
-
-    private func buildDebugReport() -> String {
-        let context = DebugReportContext(
-            generatedAt: Self.debugTimestampFormatter.string(from: Date()),
-            appVersion: AppMetadataService.currentAppVersion(),
-            buildNumber: String(AppMetadataService.currentAppBuildNumber()),
-            buildTag: Bundle.main.object(forInfoDictionaryKey: "KlacBuildTag") as? String ?? "n/a",
-            osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
-            outputDeviceName: currentOutputDeviceName,
-            outputUID: currentOutputDeviceUID.isEmpty ? "n/a" : currentOutputDeviceUID,
-            accessibilityGranted: accessibilityGranted,
-            inputMonitoringGranted: inputMonitoringGranted,
-            capturingKeyboard: capturingKeyboard,
-            systemVolumeAvailable: detectedSystemVolumeAvailable,
-            systemVolumePercent: detectedSystemVolumePercent,
-            runtimeSettings: snapshotSummaryLines(),
-            stressTestStatus: stressTestStatus
+        let gain = TypingAdaptationCoordinator.resolveGain(
+            TypingAdaptationInput(
+                strictVolumeNormalizationEnabled: strictVolumeNormalizationEnabled,
+                typingAdaptiveEnabled: typingAdaptiveEnabled,
+                typingCPS: typingCPS,
+                personalBaselineCPS: typingMetricsService.personalBaselineCPS
+            )
         )
-        return debugLogService.buildReport(context: context, latestCrashSection: latestCrashReportSection())
+        soundEngine.typingSpeedGain = Float(gain)
+        if abs(liveTypingGain - gain) > 0.005 {
+            liveTypingGain = gain
+        }
     }
 
-    private var soundSettingsModel: SoundSettings {
-        SoundSettings(
+    private func snapshotSummaryLines() -> [String] {
+        let source = RuntimeSettingsSummarySource(
+            selectedProfileRawValue: selectedProfile.rawValue,
             volume: volume,
             variation: variation,
             pitchVariation: pitchVariation,
@@ -1225,12 +1223,7 @@ final class KeyboardSoundService: ObservableObject {
             minInterKeyGapMs: minInterKeyGapMs,
             releaseDuckingStrength: releaseDuckingStrength,
             releaseDuckingWindowMs: releaseDuckingWindowMs,
-            releaseTailTightness: releaseTailTightness
-        )
-    }
-
-    private var compensationSettingsModel: CompensationSettings {
-        CompensationSettings(
+            releaseTailTightness: releaseTailTightness,
             levelMacLow: levelMacLow,
             levelKbdLow: levelKbdLow,
             levelMacLowMid: levelMacLowMid,
@@ -1242,107 +1235,44 @@ final class KeyboardSoundService: ObservableObject {
             levelMacHigh: levelMacHigh,
             levelKbdHigh: levelKbdHigh,
             dynamicCompensationEnabled: dynamicCompensationEnabled,
-            strictVolumeNormalizationEnabled: strictVolumeNormalizationEnabled
-        )
-    }
-
-    private var systemSettingsModel: SystemSettings {
-        SystemSettings(
+            strictVolumeNormalizationEnabled: strictVolumeNormalizationEnabled,
+            typingAdaptiveEnabled: typingAdaptiveEnabled,
             launchAtLogin: launchAtLogin,
             autoOutputPresetEnabled: autoOutputPresetEnabled,
             perDeviceSoundProfileEnabled: perDeviceSoundProfileEnabled,
             appearanceModeRawValue: appearanceMode.rawValue
         )
-    }
-
-    private func snapshotSummaryLines() -> [String] {
-        let sound = soundSettingsModel
-        let comp = compensationSettingsModel
-        let system = systemSettingsModel
-        return [
-            "- profile=\(selectedProfile.rawValue)",
-            "- volume=\(String(format: "%.3f", sound.volume))",
-            "- variation=\(String(format: "%.3f", sound.variation))",
-            "- pitchVariation=\(String(format: "%.3f", sound.pitchVariation))",
-            "- pressLevel=\(String(format: "%.3f", sound.pressLevel))",
-            "- releaseLevel=\(String(format: "%.3f", sound.releaseLevel))",
-            "- spaceLevel=\(String(format: "%.3f", sound.spaceLevel))",
-            "- dynamicCompensationEnabled=\(comp.dynamicCompensationEnabled)",
-            "- strictVolumeNormalizationEnabled=\(comp.strictVolumeNormalizationEnabled)",
-            "- typingAdaptiveEnabled=\(typingAdaptiveEnabled)",
-            "- stackModeEnabled=\(sound.stackModeEnabled)",
-            "- limiterEnabled=\(sound.limiterEnabled)",
-            "- autoOutputPresetEnabled=\(system.autoOutputPresetEnabled)",
-            "- perDeviceSoundProfileEnabled=\(system.perDeviceSoundProfileEnabled)"
-        ]
-    }
-
-    private func latestCrashReportSection() -> String? {
-        let diagnosticsRoot = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/DiagnosticReports", isDirectory: true)
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: diagnosticsRoot,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return nil
-        }
-        let candidates = entries.filter { url in
-            let name = url.lastPathComponent.lowercased()
-            return (name.hasPrefix("klac") || name.hasPrefix("klacapp")) &&
-                (name.hasSuffix(".crash") || name.hasSuffix(".ips"))
-        }
-        guard let latest = candidates.max(by: { lhs, rhs in
-            let ld = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            let rd = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            return ld < rd
-        }) else {
-            return nil
-        }
-        guard let data = try? Data(contentsOf: latest),
-              let text = String(data: data, encoding: .utf8) else {
-            return "Latest crash report: \(latest.path)\n(unable to decode file)"
-        }
-        let preview = text.split(separator: "\n").prefix(120).joined(separator: "\n")
-        return """
-        Latest crash report: \(latest.path)
-        ----
-        \(preview)
-        ----
-        """
+        return RuntimeSettingsSummaryBuilder.build(RuntimeSettingsSummaryMapper.map(source))
     }
 
     private func recordDebug(_ message: String) {
-        let timestamp = Self.debugTimestampFormatter.string(from: Date())
+        let timestamp = DiagnosticsTimestampProvider.debugTimestamp()
         _ = debugLogService.append(message: message, timestamp: timestamp)
-        debugLogLines = debugLogService.lines
         debugLogPreview = debugLogService.preview(maxLines: 180)
         NSLog("KlacDebug: \(message)")
     }
 
-    private static func fileTimestamp() -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        return formatter.string(from: Date())
-    }
-
     private func saveCurrentDeviceBoost() {
-        guard !currentOutputDeviceUID.isEmpty else { return }
-        outputDeviceBoosts[currentOutputDeviceUID] = currentOutputDeviceBoost.clamped(to: 0.5 ... 2.0)
-        settingsStore.encode(outputDeviceBoosts, forKey: SettingsKeys.outputDeviceBoosts)
-        if perDeviceSoundProfileEnabled {
+        guard PerDevicePersistenceCoordinator.canPersistBoost(deviceUID: currentOutputDeviceUID) else { return }
+        perDeviceSnapshotService.setBoost(currentOutputDeviceBoost, for: currentOutputDeviceUID)
+        if PerDevicePersistenceCoordinator.canPersistSnapshot(
+            perDeviceSoundProfileEnabled: perDeviceSoundProfileEnabled,
+            deviceUID: currentOutputDeviceUID
+        ) {
             saveSnapshot(for: currentOutputDeviceUID)
         }
     }
 
     private func persistPerDeviceSnapshotIfNeeded() {
-        guard perDeviceSoundProfileEnabled else { return }
-        guard !currentOutputDeviceUID.isEmpty else { return }
+        guard PerDevicePersistenceCoordinator.canPersistSnapshot(
+            perDeviceSoundProfileEnabled: perDeviceSoundProfileEnabled,
+            deviceUID: currentOutputDeviceUID
+        ) else { return }
         saveSnapshot(for: currentOutputDeviceUID)
     }
 
-    private func currentSnapshot() -> DeviceSoundSnapshot {
-        DeviceSoundSnapshot(
+    private func currentDeviceStateDTO() -> DeviceSoundStateDTO {
+        DeviceSoundStateMapper.toDTO(DeviceSoundStateSource(
             volume: volume,
             variation: variation,
             pitchVariation: pitchVariation,
@@ -1361,36 +1291,42 @@ final class KeyboardSoundService: ObservableObject {
             releaseDuckingWindowMs: releaseDuckingWindowMs,
             releaseTailTightness: releaseTailTightness,
             currentOutputDeviceBoost: currentOutputDeviceBoost
-        )
+        ))
     }
 
     private func saveSnapshot(for deviceUID: String) {
         guard !deviceUID.isEmpty else { return }
-        perDeviceSoundSnapshots[deviceUID] = currentSnapshot()
-        settingsStore.encode(perDeviceSoundSnapshots, forKey: SettingsKeys.perDeviceSoundSnapshots)
+        perDeviceSnapshotService.saveSnapshot(deviceUID: deviceUID, state: currentDeviceStateDTO())
     }
 
     private func restoreSnapshot(for deviceUID: String) -> Bool {
-        guard let snapshot = perDeviceSoundSnapshots[deviceUID] else { return false }
-        volume = snapshot.volume.clamped(to: 0.0 ... 1.0)
-        variation = snapshot.variation.clamped(to: 0.0 ... 1.0)
-        pitchVariation = snapshot.pitchVariation.clamped(to: 0.0 ... 0.6)
-        pressLevel = snapshot.pressLevel.clamped(to: 0.2 ... 1.6)
-        releaseLevel = snapshot.releaseLevel.clamped(to: 0.1 ... 1.4)
-        spaceLevel = snapshot.spaceLevel.clamped(to: 0.2 ... 1.8)
-        levelMacLowMid = snapshot.levelMacLowMid.clamped(to: 0.08 ... 0.93)
-        levelKbdLowMid = snapshot.levelKbdLowMid.clamped(to: 0.20 ... 4.00)
-        levelMacHighMid = snapshot.levelMacHighMid.clamped(to: 0.10 ... 0.98)
-        levelKbdHighMid = snapshot.levelKbdHighMid.clamped(to: 0.20 ... 4.00)
-        stackModeEnabled = snapshot.stackModeEnabled
-        limiterEnabled = snapshot.limiterEnabled
-        limiterDrive = snapshot.limiterDrive.clamped(to: 0.6 ... 2.0)
-        minInterKeyGapMs = snapshot.minInterKeyGapMs.clamped(to: 0 ... 45)
-        releaseDuckingStrength = snapshot.releaseDuckingStrength.clamped(to: 0 ... 1)
-        releaseDuckingWindowMs = snapshot.releaseDuckingWindowMs.clamped(to: 20 ... 180)
-        releaseTailTightness = snapshot.releaseTailTightness.clamped(to: 0 ... 1)
-        currentOutputDeviceBoost = snapshot.currentOutputDeviceBoost.clamped(to: 0.5 ... 2.0)
-        return true
+        perDeviceSnapshotService.restoreSnapshot(deviceUID: deviceUID) { [weak self] snapshot in
+            guard let self else { return }
+            applySoundStatePatch(SoundStatePatchMapper.deviceSnapshotPatch(from: snapshot))
+        }
+    }
+
+    private func applySoundStatePatch(_ patch: SoundStatePatch) {
+        if let selectedProfile = patch.selectedProfile { self.selectedProfile = selectedProfile }
+        if let volume = patch.volume { self.volume = volume }
+        if let variation = patch.variation { self.variation = variation }
+        if let playKeyUp = patch.playKeyUp { self.playKeyUp = playKeyUp }
+        if let pitchVariation = patch.pitchVariation { self.pitchVariation = pitchVariation }
+        if let pressLevel = patch.pressLevel { self.pressLevel = pressLevel }
+        if let releaseLevel = patch.releaseLevel { self.releaseLevel = releaseLevel }
+        if let spaceLevel = patch.spaceLevel { self.spaceLevel = spaceLevel }
+        if let levelMacLowMid = patch.levelMacLowMid { self.levelMacLowMid = levelMacLowMid }
+        if let levelKbdLowMid = patch.levelKbdLowMid { self.levelKbdLowMid = levelKbdLowMid }
+        if let levelMacHighMid = patch.levelMacHighMid { self.levelMacHighMid = levelMacHighMid }
+        if let levelKbdHighMid = patch.levelKbdHighMid { self.levelKbdHighMid = levelKbdHighMid }
+        if let stackModeEnabled = patch.stackModeEnabled { self.stackModeEnabled = stackModeEnabled }
+        if let limiterEnabled = patch.limiterEnabled { self.limiterEnabled = limiterEnabled }
+        if let limiterDrive = patch.limiterDrive { self.limiterDrive = limiterDrive }
+        if let minInterKeyGapMs = patch.minInterKeyGapMs { self.minInterKeyGapMs = minInterKeyGapMs }
+        if let releaseDuckingStrength = patch.releaseDuckingStrength { self.releaseDuckingStrength = releaseDuckingStrength }
+        if let releaseDuckingWindowMs = patch.releaseDuckingWindowMs { self.releaseDuckingWindowMs = releaseDuckingWindowMs }
+        if let releaseTailTightness = patch.releaseTailTightness { self.releaseTailTightness = releaseTailTightness }
+        if let currentOutputDeviceBoost = patch.currentOutputDeviceBoost { self.currentOutputDeviceBoost = currentOutputDeviceBoost }
     }
 
 }

@@ -9,7 +9,15 @@ struct SystemAudioPollPayload {
 }
 
 @MainActor
-final class SystemAudioMonitor {
+protocol SystemAudioMonitoring: AnyObject {
+    func start(interval: TimeInterval, onPoll: @escaping (SystemAudioPollPayload) -> Void)
+    func stop()
+    func ensureInterval(_ interval: TimeInterval, onPoll: @escaping (SystemAudioPollPayload) -> Void)
+    func resetStuckPollIfNeeded(now: CFAbsoluteTime, threshold: TimeInterval) -> Bool
+}
+
+@MainActor
+final class SystemAudioMonitor: SystemAudioMonitoring {
     private var timer: Timer?
     private var monitorInterval: TimeInterval = 0
     private let monitorQueue = DispatchQueue(label: "Klac.SystemAudioMonitor", qos: .utility)

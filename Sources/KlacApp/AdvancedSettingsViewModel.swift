@@ -1,31 +1,82 @@
 import Combine
 import SwiftUI
 
-@dynamicMemberLookup
 @MainActor
 final class AdvancedSettingsViewModel: ObservableObject {
-    let service: KeyboardSoundService
+    private let service: AdvancedSettingsServiceProtocol
     private var changeSubscription: AnyCancellable?
 
-    init(service: KeyboardSoundService) {
+    init(service: AdvancedSettingsServiceProtocol) {
         self.service = service
-        changeSubscription = service.objectWillChange.sink { [weak self] _ in
+        changeSubscription = service.changePublisher.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
     }
 
-    subscript<T>(dynamicMember keyPath: KeyPath<KeyboardSoundService, T>) -> T {
-        service[keyPath: keyPath]
-    }
+    var profilePresetLastApplied: String { service.profilePresetLastApplied }
+    var liveDynamicGain: Double { service.liveDynamicGain }
+    var liveTypingGain: Double { service.liveTypingGain }
+    var typingCPS: Double { service.typingCPS }
+    var typingWPM: Double { service.typingWPM }
+    var liveVelocityLayer: String { service.liveVelocityLayer }
+    var manifestValidationSummary: String { service.manifestValidationSummary }
+    var manifestValidationIssues: [String] { service.manifestValidationIssues }
+    var detectedSystemVolumeAvailable: Bool { service.detectedSystemVolumeAvailable }
+    var detectedSystemVolumePercent: Double { service.detectedSystemVolumePercent }
+    var currentOutputDeviceName: String { service.currentOutputDeviceName }
+    var autoOutputPresetLastApplied: String { service.autoOutputPresetLastApplied }
+    var stressTestInProgress: Bool { service.stressTestInProgress }
+    var stressTestProgress: Double { service.stressTestProgress }
+    var stressTestStatus: String { service.stressTestStatus }
+    var debugLogPreview: String { service.debugLogPreview }
+    var isABPlaying: Bool { service.isABPlaying }
+    var dynamicCompensationEnabled: Bool { service.boolValue(.dynamicCompensationEnabled) }
+    var stackModeEnabled: Bool { service.boolValue(.stackModeEnabled) }
+    var limiterEnabled: Bool { service.boolValue(.limiterEnabled) }
+    var strictVolumeNormalizationEnabled: Bool { service.boolValue(.strictVolumeNormalizationEnabled) }
+    var levelTuningMode: KlacLevelTuningMode { service.enumValue(.levelTuningMode) }
+    var appearanceMode: KlacAppearanceMode { service.enumValue(.appearanceMode) }
+    var levelMacLow: Double { service.doubleValue(.levelMacLow) }
+    var levelKbdLow: Double { service.doubleValue(.levelKbdLow) }
+    var levelMacLowMid: Double { service.doubleValue(.levelMacLowMid) }
+    var levelKbdLowMid: Double { service.doubleValue(.levelKbdLowMid) }
+    var levelMacMid: Double { service.doubleValue(.levelMacMid) }
+    var levelKbdMid: Double { service.doubleValue(.levelKbdMid) }
+    var levelMacHighMid: Double { service.doubleValue(.levelMacHighMid) }
+    var levelKbdHighMid: Double { service.doubleValue(.levelKbdHighMid) }
+    var levelMacHigh: Double { service.doubleValue(.levelMacHigh) }
+    var levelKbdHigh: Double { service.doubleValue(.levelKbdHigh) }
 
-    func binding<T>(_ keyPath: ReferenceWritableKeyPath<KeyboardSoundService, T>) -> Binding<T> {
+    func binding(_ key: AdvancedBoolSetting) -> Binding<Bool> {
         Binding(
             get: { [weak service] in
-                guard let service else { fatalError("KeyboardSoundService deallocated") }
-                return service[keyPath: keyPath]
+                service?.boolValue(key) ?? false
             },
             set: { [weak service] newValue in
-                service?[keyPath: keyPath] = newValue
+                service?.setBool(newValue, for: key)
+            }
+        )
+    }
+
+    func binding(_ key: AdvancedDoubleSetting) -> Binding<Double> {
+        Binding(
+            get: { [weak service] in
+                service?.doubleValue(key) ?? 0
+            },
+            set: { [weak service] newValue in
+                service?.setDouble(newValue, for: key)
+            }
+        )
+    }
+
+    func binding<T: RawRepresentable>(_ setting: AdvancedEnumSetting<T>) -> Binding<T> {
+        Binding(
+            get: { [weak service] in
+                guard let service else { fatalError("AdvancedSettingsServiceProtocol deallocated") }
+                return service.enumValue(setting)
+            },
+            set: { [weak service] newValue in
+                service?.setEnum(newValue, for: setting)
             }
         )
     }

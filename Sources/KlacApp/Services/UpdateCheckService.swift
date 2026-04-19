@@ -1,5 +1,9 @@
 import Foundation
 
+protocol UpdateChecking {
+    func check(currentVersion: String, currentBuild: Int) async throws -> UpdateCheckResult
+}
+
 enum UpdateCheckResult: Equatable {
     case upToDate(currentVersion: String)
     case updateAvailable(latestVersion: String, releaseURL: URL)
@@ -21,3 +25,5 @@ struct UpdateCheckService {
         return .updateAvailable(latestVersion: latestVersion, releaseURL: releaseURL)
     }
 }
+
+extension UpdateCheckService: UpdateChecking {}

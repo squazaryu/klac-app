@@ -40,8 +40,7 @@ final class ClickSoundEngine {
         case keyUp(KeyGroup)
     }
     private let samplePicker = SamplePicker<SampleGroup>()
-    private var lastOutputDeviceReinit: CFAbsoluteTime = 0
-    private var graphReadyAfter: CFAbsoluteTime = 0
+    private var rebuildState = OutputDeviceRebuildState()
     private lazy var playbackScheduler = PlaybackScheduler(format: format)
     private var currentProfile: SoundProfile = .kalihBoxWhite
     private var keepEngineRunning = true
@@ -80,58 +79,60 @@ final class ClickSoundEngine {
 
     private func loadProfileBank(for profile: SoundProfile) -> SampleBank {
         let source = SoundProfileSource.resolve(for: profile)
-        switch source.kind {
-        case .customPack:
-            return loadCustomPackOrFallback()
-        case let .manifestOnly(resourceDirectory, configFilename):
-            return loadBankFromManifest(
-                resourceDirectory: resourceDirectory,
-                configFilename: configFilename
-            )
-        case let .manifestOrMechvibes(resourceDirectory, manifestFilename, mechvibesConfigFilename):
-            let manifest = loadBankFromManifest(
-                resourceDirectory: resourceDirectory,
-                configFilename: manifestFilename
-            )
-            if !manifest.downLayers.isEmpty {
-                return manifest
+        return ProfileBankLoadCoordinator.load(
+            sourceKind: source.kind,
+            loadCustomPackOrFallback: { [weak self] in
+                self?.loadCustomPackOrFallback() ?? .empty
+            },
+            loadManifest: { [weak self] resourceDirectory, configFilename in
+                self?.loadBankFromManifest(
+                    resourceDirectory: resourceDirectory,
+                    configFilename: configFilename
+                ) ?? .empty
+            },
+            loadMechvibesConfig: { [weak self] resourceDirectory, configFilename in
+                self?.loadBankFromMechvibesConfig(
+                    resourceDirectory: resourceDirectory,
+                    configFilename: configFilename
+                ) ?? .empty
             }
-            return loadBankFromMechvibesConfig(
-                resourceDirectory: resourceDirectory,
-                configFilename: mechvibesConfigFilename
-            )
-        case let .mechvibesConfig(resourceDirectory, configFilename):
-            return loadBankFromMechvibesConfig(
-                resourceDirectory: resourceDirectory,
-                configFilename: configFilename
-            )
-        }
+        )
     }
 
     private func loadCustomPackOrFallback() -> SampleBank {
-        if let root = customPackRoot, installCustomPack(from: root) {
-            return bank
-        }
-        let fallback = Self.defaultCustomPackDirectory()
-        if installCustomPack(from: fallback) {
-            return bank
-        }
-        return loadBank(
-            keyDown: ["Sounds/kalihboxwhite/kalihboxwhite-press_key1.mp3"],
-            keyUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_key.mp3"],
-            spaceDown: ["Sounds/kalihboxwhite/kalihboxwhite-press_space.mp3"],
-            spaceUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_space.mp3"],
-            enterDown: ["Sounds/kalihboxwhite/kalihboxwhite-press_enter.mp3"],
-            enterUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_enter.mp3"],
-            backspaceDown: ["Sounds/kalihboxwhite/kalihboxwhite-press_back.mp3"],
-            backspaceUp: ["Sounds/kalihboxwhite/kalihboxwhite-release_back.mp3"]
+        CustomPackFallbackCoordinator.load(
+            customPackRoot: customPackRoot,
+            defaultCustomPackDirectory: { Self.defaultCustomPackDirectory() },
+            installCustomPack: { [weak self] root in
+                self?.installCustomPack(from: root) ?? false
+            },
+            currentBank: { [weak self] in
+                self?.bank ?? .empty
+            },
+            fallbackBank: { [weak self] in
+                let paths = BundledFallbackPackProvider.kalihBoxWhite()
+                return self?.loadBank(
+                    keyDown: paths.keyDown,
+                    keyUp: paths.keyUp,
+                    spaceDown: paths.spaceDown,
+                    spaceUp: paths.spaceUp,
+                    enterDown: paths.enterDown,
+                    enterUp: paths.enterUp,
+                    backspaceDown: paths.backspaceDown,
+                    backspaceUp: paths.backspaceUp
+                ) ?? .empty
+            }
         )
     }
 
     func startIfNeeded() {
         onAudioQueueSync {
             keepEngineRunning = true
-            if !graphController.isEngineRunning {
+            let plan = AudioStartCoordinator.makePlan(
+                engineRunning: graphController.isEngineRunning,
+                playerPlaying: graphController.isPlayerPlaying
+            )
+            if plan.shouldStartEngine {
                 do {
                     graphController.setMainMixerOutputVolume(1.0)
                     try graphController.startEngine()
@@ -142,7 +143,7 @@ final class ClickSoundEngine {
                 }
             }
 
-            if !graphController.isPlayerPlaying {
+            if plan.shouldPlayPlayer {
                 graphController.playPlayer()
             }
         }
@@ -158,18 +159,20 @@ final class ClickSoundEngine {
 
     func handleOutputDeviceChanged() {
         onAudioQueueSync {
-            let wasRunning = graphController.isEngineRunning
-            let shouldBeRunning = keepEngineRunning || wasRunning
             let now = CFAbsoluteTimeGetCurrent()
-            // Debounce noisy route notifications.
-            if now - lastOutputDeviceReinit < 0.45 { return }
-            lastOutputDeviceReinit = now
+            let plan = AudioRouteChangeCoordinator.makePlan(
+                keepEngineRunning: keepEngineRunning,
+                engineRunning: graphController.isEngineRunning,
+                now: now,
+                rebuildState: rebuildState
+            )
+            guard plan.shouldRebuildGraph else { return }
 
             rebuildAudioGraph()
-            if shouldBeRunning {
+            if plan.shouldStartAfterRebuild {
                 startIfNeeded()
             }
-            graphReadyAfter = CFAbsoluteTimeGetCurrent() + 0.06
+            AudioRouteChangeCoordinator.markRebuilt(state: &rebuildState, at: now)
             diagnostic("engine graph rebuilt after output-device change")
         }
     }
@@ -208,27 +211,38 @@ final class ClickSoundEngine {
     func runFailSafeTick() {
         onAudioQueueAsync { [weak self] in
             guard let self else { return }
-            if keepEngineRunning && !graphController.isEngineRunning {
+            let action = AudioEngineFailSafeCoordinator.decide(
+                keepEngineRunning: keepEngineRunning,
+                engineRunning: graphController.isEngineRunning,
+                playerPlaying: graphController.isPlayerPlaying,
+                hadRecentPlayback: playbackScheduler.hadRecentPlayback(within: 1.8)
+            )
+            switch action {
+            case .restartEngine:
                 startIfNeeded()
                 diagnostic("fail-safe: audio engine restarted")
-            } else if keepEngineRunning, !graphController.isPlayerPlaying, playbackScheduler.hadRecentPlayback(within: 1.8) {
+            case .resumePlayer:
                 graphController.playPlayer()
                 diagnostic("fail-safe: player resumed")
+            case .none:
+                break
             }
         }
     }
 
     private func _playDown(for keyCode: Int, autorepeat: Bool) {
-        if CFAbsoluteTimeGetCurrent() < graphReadyAfter {
-            return
-        }
-        if keepEngineRunning {
+        let now = CFAbsoluteTimeGetCurrent()
+        let preflight = PlaybackPreflightCoordinator.makePlan(
+            canPlay: OutputDeviceRebuildCoordinator.canPlay(now: now, state: rebuildState),
+            keepEngineRunning: keepEngineRunning
+        )
+        guard preflight.shouldContinue else { return }
+        if preflight.shouldStartEngine {
             startIfNeeded()
         }
         guard graphController.isEngineRunning else { return }
 
-        let keyGroup = resolveKeyGroup(for: keyCode)
-        let now = CFAbsoluteTimeGetCurrent()
+        let keyGroup = KeyCodeClassifier.resolveKeyGroup(for: keyCode)
         let effectiveVariation = max(0.10, variation)
         let downMix = AudioMixResolver.resolveDownMix(
             DownMixInput(
@@ -255,8 +269,12 @@ final class ClickSoundEngine {
         )
         lastDownHitTime = downMix.nextLastDownHitTime
         let layer = downMix.layer
-        if lastReportedLayer != layer {
-            lastReportedLayer = layer
+        let layerChange = VelocityLayerChangeCoordinator.makePlan(
+            lastReportedLayer: lastReportedLayer,
+            nextLayer: layer
+        )
+        lastReportedLayer = layerChange.nextLastReportedLayer
+        if layerChange.shouldNotify {
             onVelocityLayerChanged?(layer.rawValue)
         }
         let pool = bank.downSamples(for: keyGroup, layer: layer)
@@ -269,18 +287,20 @@ final class ClickSoundEngine {
     }
 
     private func _playUp(for keyCode: Int) {
-        if CFAbsoluteTimeGetCurrent() < graphReadyAfter {
-            return
-        }
-        if keepEngineRunning {
+        let now = CFAbsoluteTimeGetCurrent()
+        let preflight = PlaybackPreflightCoordinator.makePlan(
+            canPlay: OutputDeviceRebuildCoordinator.canPlay(now: now, state: rebuildState),
+            keepEngineRunning: keepEngineRunning
+        )
+        guard preflight.shouldContinue else { return }
+        if preflight.shouldStartEngine {
             startIfNeeded()
         }
         guard graphController.isEngineRunning else { return }
-        let keyGroup = resolveKeyGroup(for: keyCode)
+        let keyGroup = KeyCodeClassifier.resolveKeyGroup(for: keyCode)
         let pool = bank.releasePool(for: keyGroup)
         let group = SampleGroup.keyUp(keyGroup)
         let effectiveVariation = max(0.10, variation)
-        let now = CFAbsoluteTimeGetCurrent()
         let upMix = AudioMixResolver.resolveUpMix(
             UpMixInput(
                 masterVolume: masterVolume,
@@ -306,25 +326,6 @@ final class ClickSoundEngine {
             return
         case .play(let gain, let interrupt):
             schedule(samplePicker.pick(from: pool, group: group), gain: gain, interruptIfNeeded: interrupt)
-        }
-    }
-
-    private func resolveKeyGroup(for keyCode: Int) -> KeyGroup {
-        switch keyCode {
-        case 49:
-            return .space
-        case 36, 76:
-            return .enter
-        case 51, 117:
-            return .delete
-        case 53, 122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90:
-            return .function
-        case 123, 124, 125, 126:
-            return .arrow
-        case 54, 55, 56, 57, 58, 59, 60, 61, 62:
-            return .modifier
-        default:
-            return .alpha
         }
     }
 

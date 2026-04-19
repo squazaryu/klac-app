@@ -9,15 +9,15 @@ final class MenuBarViewModel: ObservableObject {
     @Published private(set) var inputMonitoringGranted: Bool = false
     @Published private(set) var accessActionHint: String?
     @Published private(set) var selectedProfile: SoundProfile = .kalihBoxWhite
-    @Published private(set) var appearanceMode: KeyboardSoundService.AppearanceMode = .system
+    @Published private(set) var appearanceMode: KlacAppearanceMode = .system
 
-    let service: KeyboardSoundService
+    private let service: MenuBarServiceProtocol
     private var changeSubscription: AnyCancellable?
 
-    init(service: KeyboardSoundService) {
+    init(service: MenuBarServiceProtocol) {
         self.service = service
         pullFromService()
-        changeSubscription = service.objectWillChange.sink { [weak self] _ in
+        changeSubscription = service.changePublisher.sink { [weak self] _ in
             Task { @MainActor in
                 self?.pullFromService()
             }
@@ -46,6 +46,10 @@ final class MenuBarViewModel: ObservableObject {
 
     func openAdvancedSettings() {
         pullFromService()
+    }
+
+    func makeAdvancedSettingsViewModel() -> AdvancedSettingsViewModel {
+        service.makeAdvancedSettingsViewModel()
     }
 
     func refreshAccess() {
