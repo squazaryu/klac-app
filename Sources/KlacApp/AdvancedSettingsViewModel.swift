@@ -49,34 +49,33 @@ final class AdvancedSettingsViewModel: ObservableObject {
 
     func binding(_ key: AdvancedBoolSetting) -> Binding<Bool> {
         Binding(
-            get: { [weak service] in
-                service?.boolValue(key) ?? false
+            get: { [service] in
+                service.boolValue(key)
             },
-            set: { [weak service] newValue in
-                service?.setBool(newValue, for: key)
+            set: { [service] newValue in
+                service.setBool(newValue, for: key)
             }
         )
     }
 
     func binding(_ key: AdvancedDoubleSetting) -> Binding<Double> {
         Binding(
-            get: { [weak service] in
-                service?.doubleValue(key) ?? 0
+            get: { [service] in
+                service.doubleValue(key)
             },
-            set: { [weak service] newValue in
-                service?.setDouble(newValue, for: key)
+            set: { [service] newValue in
+                service.setDouble(newValue, for: key)
             }
         )
     }
 
     func binding<T: RawRepresentable>(_ setting: AdvancedEnumSetting<T>) -> Binding<T> {
         Binding(
-            get: { [weak service] in
-                guard let service else { fatalError("AdvancedSettingsServiceProtocol deallocated") }
-                return service.enumValue(setting)
+            get: { [service] in
+                service.enumValue(setting)
             },
-            set: { [weak service] newValue in
-                service?.setEnum(newValue, for: setting)
+            set: { [service] newValue in
+                service.setEnum(newValue, for: setting)
             }
         )
     }

@@ -3,6 +3,89 @@ import XCTest
 @testable import KlacApp
 
 final class SoundStatePatchMapperTests: XCTestCase {
+    func testPersistedSoundPatchMapsPersistedPlanFields() {
+        let plan = PersistedSoundStatePlan(
+            selectedProfile: .mechvibesCherryMXBlackAriq,
+            playKeyUp: false,
+            autoProfileTuningEnabled: true,
+            soundSettings: SoundSettings(
+                volume: 0.58,
+                variation: 0.29,
+                pitchVariation: 0.21,
+                pressLevel: 1.07,
+                releaseLevel: 0.67,
+                spaceLevel: 1.18,
+                stackModeEnabled: true,
+                limiterEnabled: false,
+                limiterDrive: 1.11,
+                minInterKeyGapMs: 13,
+                releaseDuckingStrength: 0.55,
+                releaseDuckingWindowMs: 84,
+                releaseTailTightness: 0.36
+            ),
+            stackDensity: 0.52,
+            layerThresholdSlam: 0.05,
+            layerThresholdHard: 0.09,
+            layerThresholdMedium: 0.15
+        )
+
+        let patch = SoundStatePatchMapper.persistedSoundPatch(from: plan)
+
+        XCTAssertEqual(patch.selectedProfile, .mechvibesCherryMXBlackAriq)
+        XCTAssertEqual(patch.playKeyUp, false)
+        XCTAssertEqual(patch.volume, 0.58, accuracy: 0.0001)
+        XCTAssertEqual(patch.variation, 0.29, accuracy: 0.0001)
+        XCTAssertEqual(patch.pitchVariation, 0.21, accuracy: 0.0001)
+        XCTAssertEqual(patch.pressLevel, 1.07, accuracy: 0.0001)
+        XCTAssertEqual(patch.releaseLevel, 0.67, accuracy: 0.0001)
+        XCTAssertEqual(patch.spaceLevel, 1.18, accuracy: 0.0001)
+        XCTAssertEqual(patch.stackModeEnabled, true)
+        XCTAssertEqual(patch.limiterEnabled, false)
+        XCTAssertEqual(patch.limiterDrive, 1.11, accuracy: 0.0001)
+        XCTAssertEqual(patch.minInterKeyGapMs, 13, accuracy: 0.0001)
+        XCTAssertEqual(patch.releaseDuckingStrength, 0.55, accuracy: 0.0001)
+        XCTAssertEqual(patch.releaseDuckingWindowMs, 84, accuracy: 0.0001)
+        XCTAssertEqual(patch.releaseTailTightness, 0.36, accuracy: 0.0001)
+        XCTAssertNil(patch.currentOutputDeviceBoost)
+    }
+
+    func testSoundSettingsPatchMapsRuntimeSoundFields() {
+        let settings = SoundSettings(
+            volume: 0.66,
+            variation: 0.27,
+            pitchVariation: 0.19,
+            pressLevel: 1.14,
+            releaseLevel: 0.73,
+            spaceLevel: 1.22,
+            stackModeEnabled: true,
+            limiterEnabled: true,
+            limiterDrive: 1.35,
+            minInterKeyGapMs: 11,
+            releaseDuckingStrength: 0.61,
+            releaseDuckingWindowMs: 88,
+            releaseTailTightness: 0.33
+        )
+
+        let patch = SoundStatePatchMapper.soundSettingsPatch(from: settings)
+
+        XCTAssertNil(patch.selectedProfile)
+        XCTAssertEqual(patch.volume, 0.66, accuracy: 0.0001)
+        XCTAssertEqual(patch.variation, 0.27, accuracy: 0.0001)
+        XCTAssertEqual(patch.pitchVariation, 0.19, accuracy: 0.0001)
+        XCTAssertEqual(patch.pressLevel, 1.14, accuracy: 0.0001)
+        XCTAssertEqual(patch.releaseLevel, 0.73, accuracy: 0.0001)
+        XCTAssertEqual(patch.spaceLevel, 1.22, accuracy: 0.0001)
+        XCTAssertEqual(patch.stackModeEnabled, true)
+        XCTAssertEqual(patch.limiterEnabled, true)
+        XCTAssertEqual(patch.limiterDrive, 1.35, accuracy: 0.0001)
+        XCTAssertEqual(patch.minInterKeyGapMs, 11, accuracy: 0.0001)
+        XCTAssertEqual(patch.releaseDuckingStrength, 0.61, accuracy: 0.0001)
+        XCTAssertEqual(patch.releaseDuckingWindowMs, 88, accuracy: 0.0001)
+        XCTAssertEqual(patch.releaseTailTightness, 0.33, accuracy: 0.0001)
+        XCTAssertNil(patch.currentOutputDeviceBoost)
+        XCTAssertNil(patch.playKeyUp)
+    }
+
     func testImportedProfilePatchMapsOnlyProfileFields() {
         let state = ProfileSettingsState(
             selectedProfile: .mechvibesBoxJade,

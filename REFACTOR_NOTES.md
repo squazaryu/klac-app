@@ -248,6 +248,110 @@
 ## Stage 2 Status
 - Stage 2 refactor завершен: ключевые seam-экстракции сделаны, сборка/тесты проходят, поведение сохранено.
 
+## Post-2.1.4 Cleanup (2026-04-21)
+- Устранен runtime-crash `Fatal access conflict` в переходе output-device:
+  - `PerDeviceSnapshotService.restoreSnapshot(...)` переведен в non-mutating API,
+    чтобы избежать конфликта эксклюзивного доступа при apply snapshot в `KeyboardSoundService`.
+- Дополнительно уменьшена ответственность `KeyboardSoundService`:
+  - orchestration per-device snapshot/boost вынесен в `Services/PerDeviceSnapshotRuntimeCoordinator.swift`;
+  - runtime-assembly debug export вынесен в `Services/DiagnosticsExportRuntimeCoordinator.swift`.
+- `KeyboardSoundService` теперь делегирует:
+  - load/persist boost;
+  - persist snapshot (с сохранением существующих ключей/правил fallback);
+  - restore snapshot -> `SoundStatePatch`;
+  - build/export diagnostics runtime snapshot.
+- Добавлены unit-тесты на новые seams:
+  - `Tests/KlacAppTests/PerDeviceSnapshotRuntimeCoordinatorTests.swift`;
+  - `Tests/KlacAppTests/DiagnosticsExportRuntimeCoordinatorTests.swift`.
+- Дополнительно вынесен orchestration перехода output-device:
+  - `Services/OutputDeviceTransitionRuntimeCoordinator.swift`;
+  - `KeyboardSoundService.handleOutputDeviceTransition(...)` теперь делегирует runtime-sequence
+    (save previous snapshot -> load boost -> rebuild graph -> restore -> fallback preset -> save current snapshot).
+- Добавлены тесты порядка и fallback-поведения:
+  - `Tests/KlacAppTests/OutputDeviceTransitionRuntimeCoordinatorTests.swift`.
+- Уменьшена связанность view models с concrete publisher runtime-service:
+  - `AdvancedSettingsServiceProtocol.changePublisher` и `MenuBarServiceProtocol.changePublisher`
+    переведены на `AnyPublisher<Void, Never>`;
+  - это убирает зависимость VM-слоя от `ObservableObjectPublisher` и упрощает mock-реализации.
+- Ownership per-device runtime перенесен в stateful collaborator:
+  - `PerDeviceSnapshotRuntimeCoordinator` теперь владеет `PerDeviceSnapshotService`;
+  - `KeyboardSoundService` использует один coordinator для load/persist/restore snapshot+boost
+    вместо прямых обращений к `PerDeviceSnapshotService`.
+- Оркестрация `handleSystemAudioPoll` вынесена в
+  `Services/SystemAudioPollRuntimeCoordinator.swift`:
+  - переход устройства, rebuild при availability-change, dynamic compensation trigger;
+  - `KeyboardSoundService` оставлен как state facade (apply outcome + debug line).
+- Добавлены тесты:
+  - `Tests/KlacAppTests/SystemAudioPollRuntimeCoordinatorTests.swift`.
+- Оркестрация жизненного цикла keyboard capture вынесена в
+  `Services/KeyboardCaptureRuntimeCoordinator.swift`:
+  - `start`, `stop`, `refreshAccessibilityStatus` в `KeyboardSoundService`
+    теперь используют coordinator;
+  - сохранена совместимость поведения refresh-пути при `isEnabled == false`
+    (флаг `capturingKeyboard` не затирается принудительно).
+- Добавлены тесты:
+  - `Tests/KlacAppTests/KeyboardCaptureRuntimeCoordinatorTests.swift`.
+- `AdvancedSettingsViewModel` bindings упрощены:
+  - убраны `weak`-захваты и `fatalError` при enum-binding getter;
+  - VM держит `service` strongly, поэтому binding-closure использует стабильный strong capture.
+- Access-recovery orchestration вынесен в
+  `Services/AccessRecoveryRuntimeCoordinator.swift`:
+  - `resetPrivacyPermissions` и `runAccessRecoveryWizard` в `KeyboardSoundService`
+    теперь используют coordinator для порядка действий;
+  - `KeyboardSoundService` оставлен для интеграции с runtime-зависимостями и debug logging.
+- Добавлены тесты:
+  - `Tests/KlacAppTests/AccessRecoveryRuntimeCoordinatorTests.swift`.
+- Планирование/финализация стресс-теста вынесены в
+  `Services/StressTestRuntimeCoordinator.swift`:
+  - skip/in-progress решение;
+  - clamp длительности;
+  - профильный fallback-план;
+  - формат финального статуса/debug message.
+- Добавлены тесты:
+  - `Tests/KlacAppTests/StressTestRuntimeCoordinatorTests.swift`.
+- Async-orchestration проверки обновлений вынесена в
+  `Services/UpdateCheckRuntimeCoordinator.swift`:
+  - skip при уже идущей проверке;
+  - единый lifecycle inProgress/status/debug/action execution;
+  - `KeyboardSoundService.checkForUpdatesInteractive()` теперь делегирует runtime-flow.
+- Добавлены тесты:
+  - `Tests/KlacAppTests/UpdateCheckRuntimeCoordinatorTests.swift`.
+- Runtime-orchestration fail-safe тика вынесена в
+  `Services/FailSafeRuntimeCoordinator.swift`:
+  - reset stuck poll;
+  - keyboard capture recovery branch;
+  - audio fail-safe trigger branch.
+- Добавлены тесты:
+  - `Tests/KlacAppTests/FailSafeRuntimeCoordinatorTests.swift`.
+- A/B runtime snapshot/baseline вынесены в
+  `Services/ABComparisonRuntimeCoordinator.swift`:
+  - capture исходного состояния для restore;
+  - централизованные baseline-значения burst-сценариев.
+- Добавлены тесты:
+  - `Tests/KlacAppTests/ABComparisonRuntimeCoordinatorTests.swift`.
+- A/B scenario branching и тайминговая orchestration вынесены в
+  `Services/ABComparisonScenarioCoordinator.swift`:
+  - сценарии `core/compensation/adaptation/limiter` теперь живут вне `KeyboardSoundService`;
+  - `KeyboardSoundService.playABComparison()` оставлен для wiring/restore/logging.
+- Добавлены тесты:
+  - `Tests/KlacAppTests/ABComparisonScenarioCoordinatorTests.swift`.
+- Результат-branching для import/export/debug-export вынесен в
+  `Services/RuntimeResultLoggingCoordinator.swift`:
+  - убраны повторяющиеся `switch cancelled/success/failure` из `KeyboardSoundService`.
+- Добавлены тесты:
+  - `Tests/KlacAppTests/RuntimeResultLoggingCoordinatorTests.swift`.
+- Профильный import/export runtime-flow вынесен в
+  `Services/ProfileSettingsRuntimeCoordinator.swift`:
+  - формирование export state;
+  - orchestration import/export + apply imported state + debug logging через result coordinator.
+- Добавлены тесты:
+  - `Tests/KlacAppTests/ProfileSettingsRuntimeCoordinatorTests.swift`.
+- A/B burst playback последовательность вынесена в
+  `Services/ABStressBurstCoordinator.swift`:
+  - `KeyboardSoundService.playABStressBurst()` теперь делегирует `down/up/sleep` шаги coordinator-у.
+- Добавлены тесты:
+  - `Tests/KlacAppTests/ABStressBurstCoordinatorTests.swift`.
+
 ## Остаточные ограничения
 - `KeyboardSoundService` всё ещё крупный из-за большого количества `@Published` полей и `didSet` с побочными эффектами.
 - `ClickSoundEngine` всё ещё orchestrator-heavy, но основная mix-математика и audio-graph lifecycle уже вынесены.
@@ -255,8 +359,101 @@
   Файлы тестов обёрнуты в `#if canImport(XCTest)` для совместимости.
 - Добавлены unit-тесты на orchestration-логику перехвата:
   - `Tests/KlacAppTests/KeyboardInputMonitorCoordinatorTests.swift`
+- Финальная стабилизация stage-2 seams (2026-04-21, pass 2):
+  - после удаления внешнего extension-файла dependency builders возвращены внутрь
+    `KeyboardSoundService` как private-методы, чтобы исключить runtime/regression риск от
+    смены access-level и убрать compile break;
+  - `handleOutputDeviceTransition(...)` переведен на
+    `makeOutputDeviceTransitionRuntimeDependencies()` для уменьшения inline-closure блока;
+  - `exportDebugLog()` переведен на `makeDiagnosticsExportRuntimeSource()`, чтобы оставить
+    метод orchestration-тонким;
+  - добавлены регрессионные тесты:
+    - `OutputDeviceTransitionRuntimeCoordinatorTests.testWhenPerDeviceProfileDisabledSkipsSnapshotAndUsesAutoPresetFlow`
+    - `PerDeviceSnapshotRuntimeCoordinatorTests.testRestoreMissingSnapshotDoesNotMutateExistingSnapshot`.
+- Post-stage startup stability fix (2026-04-21):
+  - усилена инициализация menu bar icon в `AppDelegate.StatusBarController`:
+    - если `statusItem.button == nil` на старте, применяется ограниченный retry-механизм
+      с пересозданием `NSStatusItem` и повторной установкой button-action;
+    - добавлен bounded fail-safe (`maxStatusItemSetupRetries`) и явные debug logs;
+    - цель: убрать intermittent старт, когда иконка не появляется сразу после запуска.
+- Post-stage cleanup (2026-04-21, pass 3):
+  - дополнительная декомпозиция `KeyboardSoundService` без смены поведения:
+    - `runAutomatedStressTest(...)` переведен на private callback builders
+      (`makeStressTest*Callback`);
+    - `playABComparison()` переведен на private builders/state helpers
+      (`makeABComparisonStateSource`, `makeABComparisonScenarioDependencies`,
+      `restoreABComparisonState`);
+  - цель изменения: уменьшить inline orchestration-блоки и локализовать closure wiring.
+- Post-stage cleanup (2026-04-21, pass 4):
+  - `configureSoundEngine()` в `KeyboardSoundService` переведен на private callback builders:
+    - `makeVelocityLayerChangedCallback`
+    - `makeManifestValidationCallback`
+    - `makeAudioDiagnosticCallback`
+  - `configureEventTap()` упрощен: обработка события вынесена в
+    `handleKeyboardInputEvent(type:keyCode:isAutorepeat:)`.
+  - добавлен regression-тест в
+    `OutputDeviceTransitionRuntimeCoordinatorTests`:
+    - `testInitialProbeWithPersistedSettingsSkipsAutoPresetAndMarksSavedSettings`.
+- Post-stage cleanup (2026-04-21, pass 5):
+  - доп. сужение ответственности `KeyboardSoundService`:
+    - `saveCurrentDeviceBoost()` теперь делегирует объединенный flow в
+      `PerDeviceSnapshotRuntimeCoordinator.persistCurrentDeviceState(...)`;
+    - `PerDeviceSnapshotRuntimeCoordinator` стал owning-point для
+      `boost + snapshot` orchestration на текущем устройстве.
+  - добавлены тесты:
+    - `PerDeviceSnapshotRuntimeCoordinatorTests.testPersistCurrentDeviceStateWhenEnabledStoresBoostAndSnapshot`
+    - `PerDeviceSnapshotRuntimeCoordinatorTests.testPersistCurrentDeviceStateWhenDisabledStoresOnlyBoost`.
+- Post-stage cleanup (2026-04-21, pass 6):
+  - `handleSystemAudioPoll(...)` в `KeyboardSoundService` дополнительно упрощен:
+    - state assembly вынесен в `makeSystemAudioPollState()`;
+    - apply outcome state вынесен в `applySystemAudioPollState(_:)`.
+  - цель: уменьшить размер метода и локализовать mutable-state wiring.
+- Post-stage cleanup (2026-04-21, pass 7):
+  - runtime-обработка клавиатурного события вынесена в
+    `Services/KeyboardInputRuntimeCoordinator.swift`:
+    - план (`KeyboardInputEventCoordinator`) + side-effects wiring разделены;
+    - `KeyboardSoundService.handleKeyboardInputEvent(...)` теперь только делегирует.
+  - добавлены тесты:
+    - `Tests/KlacAppTests/KeyboardInputRuntimeCoordinatorTests.swift`.
+- Post-stage cleanup (2026-04-21, pass 8):
+  - `KeyboardSoundService.applySoundSettings(_:)` переведен на единый
+    patch-путь через `SoundStatePatchMapper.soundSettingsPatch(...)`;
+  - это уменьшило дубли assignment-логики и снизило риск расхождения
+    между preset-apply и snapshot/import apply flow.
+  - добавлен тест:
+    - `Tests/KlacAppTests/SoundStatePatchMapperTests.swift::testSoundSettingsPatchMapsRuntimeSoundFields`.
 
 ## Next Backlog (Stage 3, optional)
 1. Дальше сжать `KeyboardSoundService`: финально вынести оставшиеся UI/panel workflows в coordinator-и.
 2. Углубить декомпозицию `ClickSoundEngine` на playback lifecycle и pack-loading policy.
 3. Зафиксировать baseline latency/CPU в полноценном `XCTest`/Xcode раннере и добавить пороговые регресс-тесты.
+
+- Post-stage cleanup (2026-04-21, pass 9):
+  - `snapshotSummaryLines()` в `KeyboardSoundService` упрощен: assembly `RuntimeSettingsSummarySource`
+    вынесен в `makeRuntimeSettingsSummarySource()`;
+  - цель: сократить объем метода и держать format-mapping wiring локально и явно.
+- Post-stage cleanup (2026-04-21, pass 10):
+  - парсинг CLI-аргументов стресс-теста вынесен из `AppDelegate` в
+    `Services/StressTestCLIParser.swift`;
+  - это уменьшает ответственность app-lifecycle слоя и дает чистую тестируемую границу.
+  - добавлены тесты:
+    - `Tests/KlacAppTests/StressTestCLIParserTests.swift`.
+- Post-stage cleanup (2026-04-21, pass 11):
+  - восстановление persisted sound-секции в `KeyboardSoundService` переведено на единый patch-путь:
+    - `applyPersistedSoundState(...)` теперь использует
+      `SoundStatePatchMapper.persistedSoundPatch(...)`;
+  - это убирает дубли assignment-логики между persisted/imported/preset/device-snapshot ветками.
+  - добавлен тест:
+    - `Tests/KlacAppTests/SoundStatePatchMapperTests.swift::testPersistedSoundPatchMapsPersistedPlanFields`.
+
+- Post-stage cleanup (2026-04-21, pass 12):
+  - `updateDynamicCompensation()` и `updateTypingAdaptation()` в `KeyboardSoundService`
+    переведены на helper-сборку входных моделей:
+    - `makeDynamicCompensationInput()`
+    - `makeTypingAdaptationInput()`
+  - цель: уменьшить inline state-assembly и упростить локальный audit побочных эффектов.
+
+- Post-stage cleanup (2026-04-21, pass 13):
+  - применение persisted compensation-секции в `KeyboardSoundService` упрощено:
+    - выделен helper `applyCompensationSettings(_:)` на основе `CompensationSettings`;
+    - `applyPersistedCompensationState(...)` теперь собирает модель и применяет ее централизованно.

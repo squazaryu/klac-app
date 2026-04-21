@@ -24,6 +24,56 @@ struct SoundStatePatch {
 }
 
 enum SoundStatePatchMapper {
+    static func persistedSoundPatch(from plan: PersistedSoundStatePlan) -> SoundStatePatch {
+        SoundStatePatch(
+            selectedProfile: plan.selectedProfile,
+            volume: plan.soundSettings.volume,
+            variation: plan.soundSettings.variation,
+            playKeyUp: plan.playKeyUp,
+            pitchVariation: plan.soundSettings.pitchVariation,
+            pressLevel: plan.soundSettings.pressLevel,
+            releaseLevel: plan.soundSettings.releaseLevel,
+            spaceLevel: plan.soundSettings.spaceLevel,
+            levelMacLowMid: nil,
+            levelKbdLowMid: nil,
+            levelMacHighMid: nil,
+            levelKbdHighMid: nil,
+            stackModeEnabled: plan.soundSettings.stackModeEnabled,
+            limiterEnabled: plan.soundSettings.limiterEnabled,
+            limiterDrive: plan.soundSettings.limiterDrive,
+            minInterKeyGapMs: plan.soundSettings.minInterKeyGapMs,
+            releaseDuckingStrength: plan.soundSettings.releaseDuckingStrength,
+            releaseDuckingWindowMs: plan.soundSettings.releaseDuckingWindowMs,
+            releaseTailTightness: plan.soundSettings.releaseTailTightness,
+            currentOutputDeviceBoost: nil
+        )
+    }
+
+    static func soundSettingsPatch(from settings: SoundSettings) -> SoundStatePatch {
+        SoundStatePatch(
+            selectedProfile: nil,
+            volume: settings.volume,
+            variation: settings.variation,
+            playKeyUp: nil,
+            pitchVariation: settings.pitchVariation,
+            pressLevel: settings.pressLevel,
+            releaseLevel: settings.releaseLevel,
+            spaceLevel: settings.spaceLevel,
+            levelMacLowMid: nil,
+            levelKbdLowMid: nil,
+            levelMacHighMid: nil,
+            levelKbdHighMid: nil,
+            stackModeEnabled: settings.stackModeEnabled,
+            limiterEnabled: settings.limiterEnabled,
+            limiterDrive: settings.limiterDrive,
+            minInterKeyGapMs: settings.minInterKeyGapMs,
+            releaseDuckingStrength: settings.releaseDuckingStrength,
+            releaseDuckingWindowMs: settings.releaseDuckingWindowMs,
+            releaseTailTightness: settings.releaseTailTightness,
+            currentOutputDeviceBoost: nil
+        )
+    }
+
     static func importedProfilePatch(from state: ProfileSettingsState) -> SoundStatePatch {
         SoundStatePatch(
             selectedProfile: state.selectedProfile,

@@ -21,28 +21,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func parseStressDurationFromCLI() -> TimeInterval? {
-        let args = CommandLine.arguments
-        if let index = args.firstIndex(of: "--stress-test") {
-            if index + 1 < args.count, let value = Double(args[index + 1]) {
-                return value
-            }
-            return 20
-        }
-        if let inline = args.first(where: { $0.hasPrefix("--stress-test=") }) {
-            let value = inline.replacingOccurrences(of: "--stress-test=", with: "")
-            return Double(value) ?? 20
-        }
-        return nil
+        StressTestCLIParser.parseDuration(arguments: CommandLine.arguments)
     }
 }
 
 @MainActor
 final class StatusBarController: NSObject {
-    private let statusItem: NSStatusItem
+    private var statusItem: NSStatusItem
     private let popover: NSPopover
     private let hostingController: NSHostingController<AnyView>
     private var eventMonitor: Any?
     private let menuViewModel: MenuBarViewModel
+    private var statusItemSetupRetryCount = 0
+    private let maxStatusItemSetupRetries = 6
 
     init(service: KeyboardSoundService) {
         menuViewModel = MenuBarViewModel(service: service)
@@ -52,20 +43,41 @@ final class StatusBarController: NSObject {
         hostingController = NSHostingController(rootView: rootView)
         super.init()
 
+        installStatusItemButtonOrRetry()
+
+        popover.behavior = .transient
+        popover.contentViewController = hostingController
+        refreshPopoverSize()
+    }
+
+    private func installStatusItemButtonOrRetry() {
         if let button = statusItem.button {
             button.title = "K"
             button.font = NSFont.systemFont(ofSize: 13, weight: .bold)
             button.action = #selector(togglePopover(_:))
             button.target = self
             statusItem.isVisible = true
+            statusItemSetupRetryCount = 0
             NSLog("Status item created. buttonVisible=\(statusItem.isVisible)")
-        } else {
-            NSLog("Failed to create status bar button")
+            return
         }
 
-        popover.behavior = .transient
-        popover.contentViewController = hostingController
-        refreshPopoverSize()
+        guard statusItemSetupRetryCount < maxStatusItemSetupRetries else {
+            NSLog("Failed to create status bar button after retries")
+            return
+        }
+
+        statusItemSetupRetryCount += 1
+        NSLog("Status item button unavailable, retry #\(statusItemSetupRetryCount)")
+
+        // Recreate item before retrying to avoid a stale NSStatusItem reference.
+        NSStatusBar.system.removeStatusItem(statusItem)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self else { return }
+            self.installStatusItemButtonOrRetry()
+        }
     }
 
     @objc private func togglePopover(_ sender: AnyObject?) {

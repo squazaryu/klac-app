@@ -3,7 +3,7 @@ import Foundation
 
 @MainActor
 protocol MenuBarServiceProtocol: AnyObject {
-    var changePublisher: ObservableObjectPublisher { get }
+    var changePublisher: AnyPublisher<Void, Never> { get }
 
     var isEnabled: Bool { get set }
     var capturingKeyboard: Bool { get }
@@ -22,7 +22,7 @@ protocol MenuBarServiceProtocol: AnyObject {
 }
 
 extension KeyboardSoundService: MenuBarServiceProtocol {
-    var changePublisher: ObservableObjectPublisher { objectWillChange }
+    var changePublisher: AnyPublisher<Void, Never> { objectWillChange.eraseToAnyPublisher() }
 
     func makeAdvancedSettingsViewModel() -> AdvancedSettingsViewModel {
         AdvancedSettingsViewModel(service: self)

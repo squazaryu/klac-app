@@ -71,7 +71,7 @@ final class AdvancedSettingsViewModelTests: XCTestCase {
             .sink { _ in expectation.fulfill() }
             .store(in: &cancellables)
 
-        service.changePublisher.send()
+        service.emitChange()
         wait(for: [expectation], timeout: 0.2)
     }
 }
@@ -88,7 +88,8 @@ private final class MockAdvancedSettingsService: AdvancedSettingsServiceProtocol
         var debugLogPreview = ""
     }
 
-    let changePublisher = ObservableObjectPublisher()
+    private let changeSubject = PassthroughSubject<Void, Never>()
+    var changePublisher: AnyPublisher<Void, Never> { changeSubject.eraseToAnyPublisher() }
     var boolStorage: [AdvancedBoolSetting: Bool] = [:]
     var doubleStorage: [AdvancedDoubleSetting: Double] = [:]
     var abFeature: KlacABFeature = .core
@@ -184,5 +185,9 @@ private final class MockAdvancedSettingsService: AdvancedSettingsServiceProtocol
     func startStressTest(duration _: TimeInterval) { startStressTestCalls += 1 }
     func exportDebugLog() { exportDebugLogCalls += 1 }
     func clearDebugLog() { clearDebugLogCalls += 1 }
+
+    func emitChange() {
+        changeSubject.send(())
+    }
 }
 #endif

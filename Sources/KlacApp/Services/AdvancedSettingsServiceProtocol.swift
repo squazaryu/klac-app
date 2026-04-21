@@ -74,7 +74,7 @@ extension AdvancedEnumSetting where T == KlacAppearanceMode {
 
 @MainActor
 protocol AdvancedSettingsServiceProtocol: AnyObject {
-    var changePublisher: ObservableObjectPublisher { get }
+    var changePublisher: AnyPublisher<Void, Never> { get }
 
     func boolValue(_ key: AdvancedBoolSetting) -> Bool
     func setBool(_ value: Bool, for key: AdvancedBoolSetting)

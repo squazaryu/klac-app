@@ -235,7 +235,7 @@ final class KeyboardSoundService: ObservableObject {
         var initialOutputDeviceResolved: Bool = false
     }
     private var runtimeState = RuntimeState()
-    private var perDeviceSnapshotService: PerDeviceSnapshotService
+    private var perDeviceSnapshotRuntime: PerDeviceSnapshotRuntimeCoordinator
     private var failSafeTimer: Timer?
     private let typingMetricsService = TypingMetricsService()
     private var appWillTerminateObserver: NSObjectProtocol?
@@ -323,11 +323,12 @@ final class KeyboardSoundService: ObservableObject {
         )
         self.systemAudioMonitor = systemAudioMonitor ?? SystemAudioMonitor()
         let persistedState = self.settingsRepository.loadState()
-        perDeviceSnapshotService = PerDeviceSnapshotService(
+        let snapshotService = PerDeviceSnapshotService(
             settingsStore: self.settingsStore,
             snapshots: persistedState.perDeviceSoundSnapshots,
             boosts: persistedState.outputDeviceBoosts
         )
+        perDeviceSnapshotRuntime = PerDeviceSnapshotRuntimeCoordinator(snapshotService: snapshotService)
         hasPersistedPrimarySettings = persistedState.hasPrimaryPersistedSettings
         restorePersistedState(persistedState)
         configureSoundEngine()
@@ -348,10 +349,8 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func applyPersistedSoundState(_ plan: PersistedSoundStatePlan) {
-        selectedProfile = plan.selectedProfile
-        playKeyUp = plan.playKeyUp
         autoProfileTuningEnabled = plan.autoProfileTuningEnabled
-        applySoundSettings(plan.soundSettings)
+        applySoundStatePatch(SoundStatePatchMapper.persistedSoundPatch(from: plan))
         stackDensity = plan.stackDensity
         layerThresholdSlam = plan.layerThresholdSlam
         layerThresholdHard = plan.layerThresholdHard
@@ -359,19 +358,21 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func applyPersistedCompensationState(_ plan: PersistedCompensationStatePlan) {
-        dynamicCompensationEnabled = plan.dynamicCompensationEnabled
+        applyCompensationSettings(CompensationSettings(
+            levelMacLow: plan.levelMacLow,
+            levelKbdLow: plan.levelKbdLow,
+            levelMacLowMid: plan.levelMacLowMid,
+            levelKbdLowMid: plan.levelKbdLowMid,
+            levelMacMid: plan.levelMacMid,
+            levelKbdMid: plan.levelKbdMid,
+            levelMacHighMid: plan.levelMacHighMid,
+            levelKbdHighMid: plan.levelKbdHighMid,
+            levelMacHigh: plan.levelMacHigh,
+            levelKbdHigh: plan.levelKbdHigh,
+            dynamicCompensationEnabled: plan.dynamicCompensationEnabled,
+            strictVolumeNormalizationEnabled: plan.strictVolumeNormalizationEnabled
+        ))
         compensationStrength = plan.compensationStrength
-        levelMacLow = plan.levelMacLow
-        levelKbdLow = plan.levelKbdLow
-        levelMacLowMid = plan.levelMacLowMid
-        levelKbdLowMid = plan.levelKbdLowMid
-        levelMacMid = plan.levelMacMid
-        levelKbdMid = plan.levelKbdMid
-        levelMacHighMid = plan.levelMacHighMid
-        levelKbdHighMid = plan.levelKbdHighMid
-        levelMacHigh = plan.levelMacHigh
-        levelKbdHigh = plan.levelKbdHigh
-        strictVolumeNormalizationEnabled = plan.strictVolumeNormalizationEnabled
         levelTuningMode = plan.levelTuningMode
         autoNormalizeTargetAt100 = plan.autoNormalizeTargetAt100
         typingAdaptiveEnabled = plan.typingAdaptiveEnabled
@@ -401,22 +402,9 @@ final class KeyboardSoundService: ObservableObject {
         soundEngine.releaseDuckingWindowMs = Float(releaseDuckingWindowMs)
         soundEngine.releaseTailTightness = Float(releaseTailTightness)
         applyLayerThresholds()
-        soundEngine.onVelocityLayerChanged = { [weak self] layer in
-            Task { @MainActor [weak self] in
-                self?.liveVelocityLayer = layer
-            }
-        }
-        soundEngine.onManifestValidation = { [weak self] summary, issues in
-            Task { @MainActor [weak self] in
-                self?.manifestValidationSummary = summary
-                self?.manifestValidationIssues = issues
-            }
-        }
-        soundEngine.onDiagnostic = { [weak self] message in
-            Task { @MainActor [weak self] in
-                self?.recordDebug("Audio: \(message)")
-            }
-        }
+        soundEngine.onVelocityLayerChanged = makeVelocityLayerChangedCallback()
+        soundEngine.onManifestValidation = makeManifestValidationCallback()
+        soundEngine.onDiagnostic = makeAudioDiagnosticCallback()
         soundEngine.setProfile(selectedProfile)
     }
 
@@ -432,24 +420,21 @@ final class KeyboardSoundService: ObservableObject {
 
     private func configureEventTap() {
         inputMonitor.setEventHandler { [weak self] type, keyCode, isAutorepeat in
-            guard let self else { return }
-            let plan = KeyboardInputEventCoordinator.makePlan(KeyboardInputEventContext(
-                isEnabled: self.isEnabled,
-                playKeyUp: self.playKeyUp,
+            self?.handleKeyboardInputEvent(type: type, keyCode: keyCode, isAutorepeat: isAutorepeat)
+        }
+    }
+
+    private func handleKeyboardInputEvent(type: KeyEventType, keyCode: Int, isAutorepeat: Bool) {
+        KeyboardInputRuntimeCoordinator.handle(
+            context: KeyboardInputEventContext(
+                isEnabled: isEnabled,
+                playKeyUp: playKeyUp,
                 type: type,
                 keyCode: keyCode,
                 isAutorepeat: isAutorepeat
-            ))
-            if plan.shouldTrackTyping {
-                self.trackTypingHit()
-            }
-            if plan.shouldPlayDown {
-                self.soundEngine.playDown(for: keyCode, autorepeat: isAutorepeat)
-            }
-            if plan.shouldPlayUp {
-                self.soundEngine.playUp(for: keyCode)
-            }
-        }
+            ),
+            dependencies: makeKeyboardInputRuntimeDependencies()
+        )
     }
 
     private func registerTerminationObserver() {
@@ -561,27 +546,34 @@ final class KeyboardSoundService: ObservableObject {
     func start() {
         // Avoid forcing the system consent prompt on every launch.
         // User can trigger an explicit prompt via the "Проверить" action.
-        refreshAccessibilityStatus(promptIfNeeded: false)
-        soundEngine.startIfNeeded()
-        capturingKeyboard = inputMonitor.start()
+        let outcome = KeyboardCaptureRuntimeCoordinator.start(
+            dependencies: makeKeyboardCaptureStartDependencies()
+        )
+        accessibilityGranted = outcome.accessibilityGranted
+        inputMonitoringGranted = outcome.inputMonitoringGranted
+        capturingKeyboard = outcome.capturingKeyboard
+        recordDebug("Privacy status refreshed. ax=\(accessibilityGranted), input=\(inputMonitoringGranted), capturing=\(capturingKeyboard)")
         recordDebug("Keyboard capture started. capturing=\(capturingKeyboard), ax=\(accessibilityGranted), input=\(inputMonitoringGranted)")
     }
 
     func stop() {
-        inputMonitor.stop()
-        soundEngine.stop()
+        KeyboardCaptureRuntimeCoordinator.stop(
+            dependencies: makeKeyboardCaptureStopDependencies()
+        )
         capturingKeyboard = false
         recordDebug("Keyboard capture stopped")
     }
 
     func refreshAccessibilityStatus(promptIfNeeded: Bool) {
-        let status = permissionsController.refreshStatus(promptIfNeeded: promptIfNeeded)
-        accessibilityGranted = status.accessibilityGranted
-        inputMonitoringGranted = status.inputMonitoringGranted
-        if isEnabled {
-            soundEngine.startIfNeeded()
-            capturingKeyboard = inputMonitor.start()
-        }
+        let outcome = KeyboardCaptureRuntimeCoordinator.refresh(
+            promptIfNeeded: promptIfNeeded,
+            isEnabled: isEnabled,
+            currentCapturingKeyboard: capturingKeyboard,
+            dependencies: makeKeyboardCaptureRefreshDependencies()
+        )
+        accessibilityGranted = outcome.accessibilityGranted
+        inputMonitoringGranted = outcome.inputMonitoringGranted
+        capturingKeyboard = outcome.capturingKeyboard
         recordDebug("Privacy status refreshed. ax=\(accessibilityGranted), input=\(inputMonitoringGranted), capturing=\(capturingKeyboard)")
     }
 
@@ -594,35 +586,22 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     func resetPrivacyPermissions() {
-        guard let bundleID = appMetadataProvider.resolveBundleIdentifier() else {
+        let resetResult = AccessRecoveryRuntimeCoordinator.runResetFlow(
+            dependencies: makeAccessRecoveryResetDependencies()
+        )
+        guard let resetResult else {
             NSLog("Unable to resolve bundle identifier for TCC reset")
             return
         }
-        let plan = AccessRecoveryPlanCoordinator.makePlan()
-        for service in plan.tccServicesToReset {
-            permissionsController.resetTCC(service: service, bundleID: bundleID)
-        }
-        openAccessibilitySettings()
-        openInputMonitoringSettings()
-        accessActionHint = plan.postResetHint
-        accessRecoveryCoordinator.schedulePostResetRefresh { [weak self] in
-            self?.refreshAccessibilityStatus(promptIfNeeded: false)
-        }
-        recordDebug("Privacy permissions reset for bundleID=\(bundleID)")
+        accessActionHint = resetResult.hint
+        recordDebug("Privacy permissions reset for bundleID=\(resetResult.bundleID)")
     }
 
     func runAccessRecoveryWizard() {
-        resetPrivacyPermissions()
+        AccessRecoveryRuntimeCoordinator.runWizardFlow(
+            dependencies: makeAccessRecoveryWizardDependencies()
+        )
         recordDebug("Access recovery wizard started")
-        let plan = AccessRecoveryPlanCoordinator.makePlan()
-        accessRecoveryCoordinator.scheduleWizard(openSettings: { [weak self] in
-            self?.openAccessibilitySettings()
-            self?.openInputMonitoringSettings()
-        }, setHint: { [weak self] in
-            self?.accessActionHint = plan.wizardHint
-        }, restart: { [weak self] in
-            self?.restartApplication()
-        })
     }
 
     func restartApplication() {
@@ -633,27 +612,13 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     func checkForUpdatesInteractive() {
-        guard !updateCheckInProgress else { return }
-        updateCheckInProgress = true
-        updateStatusText = "Проверка..."
-        recordDebug("Update check started")
-
         Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.updateCheckInProgress = false }
-
-            let currentVersion = self.appMetadataProvider.currentAppVersion()
-            let currentBuild = self.appMetadataProvider.currentAppBuildNumber()
-            let presentation = await self.updateCheckFlowCoordinator.run(
-                currentVersion: currentVersion,
-                currentBuild: currentBuild
-            )
-            self.updateStatusText = presentation.statusText
-            self.recordDebug(presentation.debugMessage)
-            UpdateCheckActionExecutor.execute(
-                presentation.action,
-                alertPresenter: self.alertPresenter,
-                urlOpener: self.urlOpener
+            await UpdateCheckRuntimeCoordinator.runIfNeeded(
+                isAlreadyInProgress: self.updateCheckInProgress,
+                currentVersion: self.appMetadataProvider.currentAppVersion(),
+                currentBuild: self.appMetadataProvider.currentAppBuildNumber(),
+                dependencies: makeUpdateCheckRuntimeDependencies()
             )
         }
     }
@@ -674,61 +639,58 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     func runAutomatedStressTest(duration: TimeInterval = 20, includeOutputRouteSimulation: Bool = true) async {
-        guard !stressTestInProgress else {
-            recordDebug("Stress test skipped: already in progress")
+        let decision = StressTestRuntimeCoordinator.begin(
+            isInProgress: stressTestInProgress,
+            duration: duration,
+            includeOutputRouteSimulation: includeOutputRouteSimulation,
+            currentProfile: selectedProfile
+        )
+        guard case let .start(plan) = decision else {
+            if case let .skip(debugMessage) = decision {
+                recordDebug(debugMessage)
+            }
             return
         }
-        let effectiveDuration = duration.clamped(to: 5 ... 180)
+
         stressTestInProgress = true
         stressTestProgress = 0
-        stressTestStatus = "Запущен (\(Int(effectiveDuration))с)"
-        recordDebug("Stress test started. duration=\(Int(effectiveDuration))s, routeSimulation=\(includeOutputRouteSimulation)")
+        stressTestStatus = plan.statusText
+        recordDebug(plan.startDebugMessage)
 
-        let originalProfile = selectedProfile
-        let profilePlan = StressProfileTransitionCoordinator.prepare(
-            currentProfile: selectedProfile,
-            fallbackProfile: .kalihBoxWhite
-        )
-        if profilePlan.switchedFromOriginal {
-            selectedProfile = profilePlan.effectiveProfile
-            recordDebug("Stress test switched profile customPack -> kalihBoxWhite (to guarantee playable samples)")
+        if plan.profilePlan.switchedFromOriginal {
+            selectedProfile = plan.profilePlan.effectiveProfile
+            if let switchDebugMessage = plan.switchDebugMessage {
+                recordDebug(switchDebugMessage)
+            }
         }
         start()
         soundEngine.startIfNeeded()
 
         defer {
-            if StressProfileTransitionCoordinator.shouldRestoreOriginal(switchedFromOriginal: profilePlan.switchedFromOriginal),
-               selectedProfile != originalProfile
+            if StressTestRuntimeCoordinator.shouldRestoreOriginalProfile(
+                switchedFromOriginal: plan.profilePlan.switchedFromOriginal,
+                selectedProfile: selectedProfile,
+                originalProfile: plan.originalProfile
+            )
             {
-                selectedProfile = originalProfile
-                recordDebug("Stress test restored profile to \(originalProfile.rawValue)")
+                selectedProfile = plan.originalProfile
+                recordDebug("Stress test restored profile to \(plan.originalProfile.rawValue)")
             }
             stressTestInProgress = false
             stressTestProgress = 1
         }
 
         let result = await StressTestService.run(
-            duration: effectiveDuration,
+            duration: plan.effectiveDuration,
             includeOutputRouteSimulation: includeOutputRouteSimulation,
-            onProgress: { [weak self] progress in
-                self?.stressTestProgress = progress
-            },
-            onDown: { [weak self] keyCode, autorepeat in
-                self?.soundEngine.playDown(for: keyCode, autorepeat: autorepeat)
-            },
-            onUp: { [weak self] keyCode in
-                self?.soundEngine.playUp(for: keyCode)
-            },
-            onRouteRebuild: { [weak self] in
-                self?.soundEngine.handleOutputDeviceChanged()
-            }
+            onProgress: makeStressTestProgressCallback(),
+            onDown: makeStressTestDownCallback(),
+            onUp: makeStressTestUpCallback(),
+            onRouteRebuild: makeStressTestRouteRebuildCallback()
         )
 
-        stressTestStatus = "ОК · \(Int(result.elapsed.rounded()))с · down \(result.downHits) / up \(result.upHits)"
-        recordDebug(
-            "Stress test finished. elapsed=\(String(format: "%.2f", result.elapsed))s, " +
-                "down=\(result.downHits), up=\(result.upHits), routeRebuilds=\(result.routeRebuilds)"
-        )
+        stressTestStatus = StressTestRuntimeCoordinator.finishStatus(result: result)
+        recordDebug(StressTestRuntimeCoordinator.finishDebugMessage(result: result))
     }
 
     func applyHeadphonesPreset() {
@@ -748,150 +710,103 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func applySoundSettings(_ settings: SoundSettings) {
-        volume = settings.volume
-        variation = settings.variation
-        pitchVariation = settings.pitchVariation
-        pressLevel = settings.pressLevel
-        releaseLevel = settings.releaseLevel
-        spaceLevel = settings.spaceLevel
-        stackModeEnabled = settings.stackModeEnabled
-        limiterEnabled = settings.limiterEnabled
-        limiterDrive = settings.limiterDrive
-        minInterKeyGapMs = settings.minInterKeyGapMs
-        releaseDuckingStrength = settings.releaseDuckingStrength
-        releaseDuckingWindowMs = settings.releaseDuckingWindowMs
-        releaseTailTightness = settings.releaseTailTightness
+        applySoundStatePatch(SoundStatePatchMapper.soundSettingsPatch(from: settings))
+    }
+
+    private func applyCompensationSettings(_ settings: CompensationSettings) {
+        dynamicCompensationEnabled = settings.dynamicCompensationEnabled
+        levelMacLow = settings.levelMacLow
+        levelKbdLow = settings.levelKbdLow
+        levelMacLowMid = settings.levelMacLowMid
+        levelKbdLowMid = settings.levelKbdLowMid
+        levelMacMid = settings.levelMacMid
+        levelKbdMid = settings.levelKbdMid
+        levelMacHighMid = settings.levelMacHighMid
+        levelKbdHighMid = settings.levelKbdHighMid
+        levelMacHigh = settings.levelMacHigh
+        levelKbdHigh = settings.levelKbdHigh
+        strictVolumeNormalizationEnabled = settings.strictVolumeNormalizationEnabled
     }
 
     func playABComparison() {
         guard !isABPlaying else { return }
         isABPlaying = true
 
-        let originalCompensationEnabled = dynamicCompensationEnabled
-        let originalAdaptationEnabled = typingAdaptiveEnabled
-        let originalLimiterEnabled = limiterEnabled
-        let originalCompensationStrength = compensationStrength
-        let originalVolume = volume
-        let originalPressLevel = pressLevel
-        let originalReleaseLevel = releaseLevel
-        let originalSpaceLevel = spaceLevel
-        let originalSystemVolume = lastSystemVolume
+        let restoreState = ABComparisonRuntimeCoordinator.capture(makeABComparisonStateSource())
+        let baseline = ABComparisonRuntimeCoordinator.baselineBurstState
 
         Task { @MainActor [weak self] in
             guard let self else { return }
 
-            switch self.abFeature {
-            case .core:
-                self.volume = 1.0
-                self.pressLevel = 1.5
-                self.releaseLevel = 1.1
-                self.spaceLevel = 1.5
-                self.compensationStrength = 2.0
-                self.lastSystemVolume = 0.1
-                self.updateDynamicCompensation()
-                self.dynamicCompensationEnabled = false
-                self.limiterEnabled = false
-                await self.playABStressBurst()
-                try? await Task.sleep(nanoseconds: 220_000_000)
-                self.dynamicCompensationEnabled = true
-                self.limiterEnabled = true
-                self.updateDynamicCompensation()
-                await self.playABStressBurst()
-            case .compensation:
-                self.volume = 1.0
-                self.pressLevel = 1.5
-                self.releaseLevel = 1.1
-                self.spaceLevel = 1.5
-                self.compensationStrength = 2.0
-                self.lastSystemVolume = 0.1
-                self.updateDynamicCompensation()
-                self.dynamicCompensationEnabled = false
-                await self.playABStressBurst()
-                try? await Task.sleep(nanoseconds: 220_000_000)
-                self.dynamicCompensationEnabled = true
-                self.updateDynamicCompensation()
-                await self.playABStressBurst()
-            case .adaptation:
-                self.typingAdaptiveEnabled = false
-                self.playTestSound()
-                try? await Task.sleep(nanoseconds: 350_000_000)
-                self.typingAdaptiveEnabled = true
-                self.playTestSound()
-            case .limiter:
-                self.volume = 1.0
-                self.pressLevel = 1.5
-                self.releaseLevel = 1.1
-                self.spaceLevel = 1.5
-                self.limiterEnabled = false
-                await self.playABStressBurst()
-                try? await Task.sleep(nanoseconds: 220_000_000)
-                self.limiterEnabled = true
-                await self.playABStressBurst()
-            }
+            await ABComparisonScenarioCoordinator.run(
+                feature: self.abFeature,
+                dependencies: makeABComparisonScenarioDependencies(baseline: baseline)
+            )
 
             try? await Task.sleep(nanoseconds: 120_000_000)
-            self.dynamicCompensationEnabled = originalCompensationEnabled
-            self.typingAdaptiveEnabled = originalAdaptationEnabled
-            self.limiterEnabled = originalLimiterEnabled
-            self.compensationStrength = originalCompensationStrength
-            self.volume = originalVolume
-            self.pressLevel = originalPressLevel
-            self.releaseLevel = originalReleaseLevel
-            self.spaceLevel = originalSpaceLevel
-            self.lastSystemVolume = originalSystemVolume
-            self.updateDynamicCompensation()
-            self.isABPlaying = false
+            self.restoreABComparisonState(restoreState)
         }
     }
 
     private func playABStressBurst() async {
         soundEngine.startIfNeeded()
-        for key in [49, 36, 51, 0, 49] {
-            soundEngine.playDown(for: key, autorepeat: false)
-            if playKeyUp {
-                soundEngine.playUp(for: key)
-            }
-            try? await Task.sleep(nanoseconds: 65_000_000)
-        }
+        await ABStressBurstCoordinator.run(
+            playKeyUp: playKeyUp,
+            dependencies: ABStressBurstDependencies(
+                playDown: { [weak self] key in
+                    self?.soundEngine.playDown(for: key, autorepeat: false)
+                },
+                playUp: { [weak self] key in
+                    self?.soundEngine.playUp(for: key)
+                },
+                sleep: { nanoseconds in
+                    try? await Task.sleep(nanoseconds: nanoseconds)
+                }
+            )
+        )
     }
 
     func exportSettings() {
-        let state = ProfileSettingsState(
-            selectedProfile: selectedProfile,
-            volume: volume,
-            variation: variation,
-            playKeyUp: playKeyUp,
-            pressLevel: pressLevel,
-            releaseLevel: releaseLevel,
-            spaceLevel: spaceLevel
+        ProfileSettingsRuntimeCoordinator.runExport(
+            source: ProfileSettingsExportSource(
+                selectedProfile: selectedProfile,
+                volume: volume,
+                variation: variation,
+                playKeyUp: playKeyUp,
+                pressLevel: pressLevel,
+                releaseLevel: releaseLevel,
+                spaceLevel: spaceLevel
+            ),
+            dependencies: makeProfileSettingsRuntimeDependencies()
         )
-        switch profileSettingsTransferCoordinator.exportSettings(from: state) {
-        case .cancelled:
-            break
-        case let .success(path):
-            recordDebug("Settings exported: \(path)")
-        case let .failure(message):
-            recordDebug("Failed to export settings: \(message)")
-        }
     }
 
     func importSettings() {
-        let (result, importedState) = profileSettingsTransferCoordinator.importSettings(fallbackProfile: selectedProfile)
-        switch result {
-        case .cancelled:
-            break
-        case let .success(path):
-            if let importedState {
-                applyImportedProfileSettings(importedState)
-            }
-            recordDebug("Settings imported: \(path)")
-        case let .failure(message):
-            recordDebug("Failed to import settings: \(message)")
-        }
+        ProfileSettingsRuntimeCoordinator.runImport(
+            fallbackProfile: selectedProfile,
+            dependencies: makeProfileSettingsRuntimeDependencies()
+        )
     }
 
     private func applyImportedProfileSettings(_ state: ProfileSettingsState) {
         applySoundStatePatch(SoundStatePatchMapper.importedProfilePatch(from: state))
+    }
+
+    private func makeProfileSettingsRuntimeDependencies() -> ProfileSettingsRuntimeDependencies {
+        ProfileSettingsRuntimeDependencies(
+            exportSettings: { [weak self] state in
+                self?.profileSettingsTransferCoordinator.exportSettings(from: state) ?? .cancelled
+            },
+            importSettings: { [weak self] fallback in
+                self?.profileSettingsTransferCoordinator.importSettings(fallbackProfile: fallback) ?? (.cancelled, nil)
+            },
+            applyImportedSettings: { [weak self] state in
+                self?.applyImportedProfileSettings(state)
+            },
+            recordDebug: { [weak self] message in
+                self?.recordDebug(message)
+            }
+        )
     }
 
     func clearDebugLog() {
@@ -901,29 +816,15 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     func exportDebugLog() {
-        let runtimeContext = DiagnosticsRuntimeContextMapper.map(DiagnosticsRuntimeContextInput(
-            outputDeviceName: currentOutputDeviceName,
-            outputUID: currentOutputDeviceUID,
-            accessibilityGranted: accessibilityGranted,
-            inputMonitoringGranted: inputMonitoringGranted,
-            capturingKeyboard: capturingKeyboard,
-            systemVolumeAvailable: detectedSystemVolumeAvailable,
-            systemVolumePercent: detectedSystemVolumePercent,
-            runtimeSettings: snapshotSummaryLines(),
-            stressTestStatus: stressTestStatus
-        ))
-        let runtimeSnapshot = diagnosticsSnapshotFactory.makeSnapshot(context: runtimeContext)
-        switch debugLogExportCoordinator.exportDebugLog(
-            runtimeSnapshot: runtimeSnapshot,
+        let source = makeDiagnosticsExportRuntimeSource()
+        let result = DiagnosticsExportRuntimeCoordinator.export(
+            source: source,
+            diagnosticsSnapshotFactory: diagnosticsSnapshotFactory,
             debugLogService: debugLogService,
-            defaultFileName: "klac-debug-\(DiagnosticsTimestampProvider.fileTimestamp()).log"
-        ) {
-        case .cancelled:
-            break
-        case let .success(path):
-            recordDebug("Debug log exported: \(path)")
-        case let .failure(message):
-            recordDebug("Failed to export debug log: \(message)")
+            debugLogExportCoordinator: debugLogExportCoordinator
+        )
+        RuntimeResultLoggingCoordinator.handleDebugLogExportResult(result) { [weak self] message in
+            self?.recordDebug(message)
         }
     }
 
@@ -944,77 +845,33 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func handleSystemAudioPoll(_ payload: SystemAudioPollPayload) {
-        let pollState = SystemAudioPollState(
-            detectedSystemVolumeAvailable: detectedSystemVolumeAvailable,
-            detectedSystemVolumePercent: detectedSystemVolumePercent,
-            lastSystemVolume: lastSystemVolume,
-            lastOutputDeviceID: lastOutputDeviceID,
-            currentOutputDeviceUID: currentOutputDeviceUID,
-            currentOutputDeviceName: currentOutputDeviceName,
-            initialOutputDeviceResolved: initialOutputDeviceResolved
+        let currentState = makeSystemAudioPollState()
+        let outcome = SystemAudioPollRuntimeCoordinator.handle(
+            payload: payload,
+            state: currentState,
+            dependencies: makeSystemAudioPollRuntimeDependencies()
         )
-        let result = SystemAudioPollCoordinator.process(payload: payload, state: pollState)
 
-        detectedSystemVolumeAvailable = result.state.detectedSystemVolumeAvailable
-        detectedSystemVolumePercent = result.state.detectedSystemVolumePercent
-        lastSystemVolume = result.state.lastSystemVolume
-        lastOutputDeviceID = result.state.lastOutputDeviceID
-        currentOutputDeviceUID = result.state.currentOutputDeviceUID
-        currentOutputDeviceName = result.state.currentOutputDeviceName
-        initialOutputDeviceResolved = result.state.initialOutputDeviceResolved
+        applySystemAudioPollState(outcome.state)
 
-        let volumeChanged = result.volumeChanged
-        let availabilityChanged = result.availabilityChanged
-        let deviceChanged = result.deviceChanged
-        if deviceChanged {
-            handleOutputDeviceTransition(result: result)
-        }
-        if availabilityChanged && !deviceChanged {
-            soundEngine.handleOutputDeviceChanged()
+        if outcome.didRebuildForAvailabilityChange {
             recordDebug("Output stream availability changed. Rebuilt audio graph")
-        }
-
-        if volumeChanged || deviceChanged || availabilityChanged {
-            updateDynamicCompensation()
         }
     }
 
     private func handleOutputDeviceTransition(result: SystemAudioPollResult) {
-        let deviceUID = result.deviceUID
-        let deviceName = result.deviceName
-        let transitionContext = OutputDeviceTransitionContext(
+        let outcome = OutputDeviceTransitionRuntimeCoordinator.handle(
+            result: result,
             perDeviceSoundProfileEnabled: perDeviceSoundProfileEnabled,
-            previousDeviceUID: result.previousDeviceUID,
-            newDeviceUID: deviceUID,
-            isInitialProbe: result.isInitialProbe,
-            hasPersistedPrimarySettings: hasPersistedPrimarySettings
+            hasPersistedPrimarySettings: hasPersistedPrimarySettings,
+            dependencies: makeOutputDeviceTransitionRuntimeDependencies()
         )
-        let beginPlan = OutputDeviceTransitionCoordinator.beginPlan(for: transitionContext)
-        if beginPlan.shouldSavePreviousSnapshot {
-            saveSnapshot(for: result.previousDeviceUID)
-        }
-        currentOutputDeviceBoost = perDeviceSnapshotService.boost(for: deviceUID)
-        soundEngine.handleOutputDeviceChanged()
-        var restored = false
-        if beginPlan.shouldAttemptRestoreSnapshot {
-            restored = restoreSnapshot(for: deviceUID)
-        }
-        let finalizePlan = OutputDeviceTransitionCoordinator.finalizePlan(
-            for: transitionContext,
-            restoredSnapshot: restored
-        )
-        switch finalizePlan.presetAction {
-        case .applyAutoPreset:
-            applyAutoOutputPresetIfNeeded(deviceUID: deviceUID, deviceName: deviceName)
-        case .markSavedSettings, .markDeviceProfile:
-            break
-        }
-        if let statusLabel = finalizePlan.statusLabel {
+        currentOutputDeviceBoost = outcome.currentOutputDeviceBoost
+        if let statusLabel = outcome.statusLabel {
             autoOutputPresetLastApplied = statusLabel
         }
-        if finalizePlan.shouldSaveNewSnapshot {
-            saveSnapshot(for: deviceUID)
-        }
+        let deviceUID = result.deviceUID
+        let deviceName = result.deviceName
         recordDebug("Output device changed: \(deviceName) [uid=\(deviceUID.isEmpty ? "n/a" : deviceUID)]")
     }
 
@@ -1028,58 +885,31 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func runFailSafeTick() {
-        let now = CFAbsoluteTimeGetCurrent()
-
-        if systemAudioMonitor.resetStuckPollIfNeeded(now: now, threshold: 6.0) {
-            recordDebug("Fail-safe: reset stuck system-volume poll (>6.0s)")
-        }
-
-        let plan = FailSafeTickCoordinator.makePlan(
-            isEnabled: isEnabled,
-            currentlyCapturingKeyboard: capturingKeyboard,
-            accessibilityGranted: accessibilityGranted,
-            inputMonitoringGranted: inputMonitoringGranted
+        let outcome = FailSafeRuntimeCoordinator.run(
+            input: FailSafeRuntimeInput(
+                now: CFAbsoluteTimeGetCurrent(),
+                resetThreshold: 6.0,
+                isEnabled: isEnabled,
+                currentlyCapturingKeyboard: capturingKeyboard,
+                accessibilityGranted: accessibilityGranted,
+                inputMonitoringGranted: inputMonitoringGranted
+            ),
+            dependencies: makeFailSafeRuntimeDependencies()
         )
 
-        if plan.shouldAttemptKeyboardRecovery {
-            let restarted = inputMonitor.recoverIfNeeded(
-                isEnabled: isEnabled,
-                accessibilityGranted: accessibilityGranted,
-                inputMonitoringGranted: inputMonitoringGranted,
-                currentlyCapturing: capturingKeyboard
-            )
+        if outcome.didResetStuckPoll {
+            recordDebug("Fail-safe: reset stuck system-volume poll (>6.0s)")
+        }
+        if let restarted = outcome.recoveredKeyboardCapture {
             capturingKeyboard = restarted
             if restarted {
                 recordDebug("Fail-safe: keyboard capture auto-restarted")
             }
         }
-
-        if plan.shouldRunAudioEngineFailSafe {
-            soundEngine.runFailSafeTick()
-        }
     }
 
     private func updateDynamicCompensation() {
-        let input = DynamicCompensationInput(
-            strictVolumeNormalizationEnabled: strictVolumeNormalizationEnabled,
-            levelTuningMode: levelTuningMode,
-            lastSystemVolume: lastSystemVolume,
-            autoNormalizeTargetAt100: autoNormalizeTargetAt100,
-            levelMacLow: levelMacLow,
-            levelKbdLow: levelKbdLow,
-            levelMacLowMid: levelMacLowMid,
-            levelKbdLowMid: levelKbdLowMid,
-            levelMacMid: levelMacMid,
-            levelKbdMid: levelKbdMid,
-            levelMacHighMid: levelMacHighMid,
-            levelKbdHighMid: levelKbdHighMid,
-            levelMacHigh: levelMacHigh,
-            levelKbdHigh: levelKbdHigh,
-            dynamicCompensationEnabled: dynamicCompensationEnabled,
-            compensationStrength: compensationStrength,
-            currentOutputDeviceBoost: currentOutputDeviceBoost
-        )
-        let gain = DynamicCompensationCoordinator.resolveGain(input)
+        let gain = DynamicCompensationCoordinator.resolveGain(makeDynamicCompensationInput())
         let clamped = Float(gain).clamped(to: 0.20 ... 6.0)
         soundEngine.dynamicCompensationGain = clamped
         let next = Double(clamped)
@@ -1194,14 +1024,7 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func updateTypingAdaptation() {
-        let gain = TypingAdaptationCoordinator.resolveGain(
-            TypingAdaptationInput(
-                strictVolumeNormalizationEnabled: strictVolumeNormalizationEnabled,
-                typingAdaptiveEnabled: typingAdaptiveEnabled,
-                typingCPS: typingCPS,
-                personalBaselineCPS: typingMetricsService.personalBaselineCPS
-            )
-        )
+        let gain = TypingAdaptationCoordinator.resolveGain(makeTypingAdaptationInput())
         soundEngine.typingSpeedGain = Float(gain)
         if abs(liveTypingGain - gain) > 0.005 {
             liveTypingGain = gain
@@ -1209,7 +1032,12 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func snapshotSummaryLines() -> [String] {
-        let source = RuntimeSettingsSummarySource(
+        let source = makeRuntimeSettingsSummarySource()
+        return RuntimeSettingsSummaryBuilder.build(RuntimeSettingsSummaryMapper.map(source))
+    }
+
+    private func makeRuntimeSettingsSummarySource() -> RuntimeSettingsSummarySource {
+        RuntimeSettingsSummarySource(
             selectedProfileRawValue: selectedProfile.rawValue,
             volume: volume,
             variation: variation,
@@ -1242,7 +1070,37 @@ final class KeyboardSoundService: ObservableObject {
             perDeviceSoundProfileEnabled: perDeviceSoundProfileEnabled,
             appearanceModeRawValue: appearanceMode.rawValue
         )
-        return RuntimeSettingsSummaryBuilder.build(RuntimeSettingsSummaryMapper.map(source))
+    }
+
+    private func makeDynamicCompensationInput() -> DynamicCompensationInput {
+        DynamicCompensationInput(
+            strictVolumeNormalizationEnabled: strictVolumeNormalizationEnabled,
+            levelTuningMode: levelTuningMode,
+            lastSystemVolume: lastSystemVolume,
+            autoNormalizeTargetAt100: autoNormalizeTargetAt100,
+            levelMacLow: levelMacLow,
+            levelKbdLow: levelKbdLow,
+            levelMacLowMid: levelMacLowMid,
+            levelKbdLowMid: levelKbdLowMid,
+            levelMacMid: levelMacMid,
+            levelKbdMid: levelKbdMid,
+            levelMacHighMid: levelMacHighMid,
+            levelKbdHighMid: levelKbdHighMid,
+            levelMacHigh: levelMacHigh,
+            levelKbdHigh: levelKbdHigh,
+            dynamicCompensationEnabled: dynamicCompensationEnabled,
+            compensationStrength: compensationStrength,
+            currentOutputDeviceBoost: currentOutputDeviceBoost
+        )
+    }
+
+    private func makeTypingAdaptationInput() -> TypingAdaptationInput {
+        TypingAdaptationInput(
+            strictVolumeNormalizationEnabled: strictVolumeNormalizationEnabled,
+            typingAdaptiveEnabled: typingAdaptiveEnabled,
+            typingCPS: typingCPS,
+            personalBaselineCPS: typingMetricsService.personalBaselineCPS
+        )
     }
 
     private func recordDebug(_ message: String) {
@@ -1253,26 +1111,20 @@ final class KeyboardSoundService: ObservableObject {
     }
 
     private func saveCurrentDeviceBoost() {
-        guard PerDevicePersistenceCoordinator.canPersistBoost(deviceUID: currentOutputDeviceUID) else { return }
-        perDeviceSnapshotService.setBoost(currentOutputDeviceBoost, for: currentOutputDeviceUID)
-        if PerDevicePersistenceCoordinator.canPersistSnapshot(
+        perDeviceSnapshotRuntime.persistCurrentDeviceState(
             perDeviceSoundProfileEnabled: perDeviceSoundProfileEnabled,
-            deviceUID: currentOutputDeviceUID
-        ) {
-            saveSnapshot(for: currentOutputDeviceUID)
-        }
+            deviceUID: currentOutputDeviceUID,
+            currentOutputDeviceBoost: currentOutputDeviceBoost,
+            source: currentDeviceStateSource()
+        )
     }
 
     private func persistPerDeviceSnapshotIfNeeded() {
-        guard PerDevicePersistenceCoordinator.canPersistSnapshot(
-            perDeviceSoundProfileEnabled: perDeviceSoundProfileEnabled,
-            deviceUID: currentOutputDeviceUID
-        ) else { return }
-        saveSnapshot(for: currentOutputDeviceUID)
+        persistSnapshot(for: currentOutputDeviceUID)
     }
 
-    private func currentDeviceStateDTO() -> DeviceSoundStateDTO {
-        DeviceSoundStateMapper.toDTO(DeviceSoundStateSource(
+    private func currentDeviceStateSource() -> DeviceSoundStateSource {
+        DeviceSoundStateSource(
             volume: volume,
             variation: variation,
             pitchVariation: pitchVariation,
@@ -1291,19 +1143,23 @@ final class KeyboardSoundService: ObservableObject {
             releaseDuckingWindowMs: releaseDuckingWindowMs,
             releaseTailTightness: releaseTailTightness,
             currentOutputDeviceBoost: currentOutputDeviceBoost
-        ))
+        )
     }
 
-    private func saveSnapshot(for deviceUID: String) {
-        guard !deviceUID.isEmpty else { return }
-        perDeviceSnapshotService.saveSnapshot(deviceUID: deviceUID, state: currentDeviceStateDTO())
+    private func persistSnapshot(for deviceUID: String) {
+        perDeviceSnapshotRuntime.persistSnapshotIfNeeded(
+            perDeviceSoundProfileEnabled: perDeviceSoundProfileEnabled,
+            deviceUID: deviceUID,
+            source: currentDeviceStateSource()
+        )
     }
 
     private func restoreSnapshot(for deviceUID: String) -> Bool {
-        perDeviceSnapshotService.restoreSnapshot(deviceUID: deviceUID) { [weak self] snapshot in
-            guard let self else { return }
-            applySoundStatePatch(SoundStatePatchMapper.deviceSnapshotPatch(from: snapshot))
+        guard let patch = perDeviceSnapshotRuntime.restoreSnapshotPatchIfAvailable(deviceUID: deviceUID) else {
+            return false
         }
+        applySoundStatePatch(patch)
+        return true
     }
 
     private func applySoundStatePatch(_ patch: SoundStatePatch) {
@@ -1327,6 +1183,339 @@ final class KeyboardSoundService: ObservableObject {
         if let releaseDuckingWindowMs = patch.releaseDuckingWindowMs { self.releaseDuckingWindowMs = releaseDuckingWindowMs }
         if let releaseTailTightness = patch.releaseTailTightness { self.releaseTailTightness = releaseTailTightness }
         if let currentOutputDeviceBoost = patch.currentOutputDeviceBoost { self.currentOutputDeviceBoost = currentOutputDeviceBoost }
+    }
+
+    private func makeSystemAudioPollState() -> SystemAudioPollState {
+        SystemAudioPollState(
+            detectedSystemVolumeAvailable: detectedSystemVolumeAvailable,
+            detectedSystemVolumePercent: detectedSystemVolumePercent,
+            lastSystemVolume: lastSystemVolume,
+            lastOutputDeviceID: lastOutputDeviceID,
+            currentOutputDeviceUID: currentOutputDeviceUID,
+            currentOutputDeviceName: currentOutputDeviceName,
+            initialOutputDeviceResolved: initialOutputDeviceResolved
+        )
+    }
+
+    private func applySystemAudioPollState(_ state: SystemAudioPollState) {
+        detectedSystemVolumeAvailable = state.detectedSystemVolumeAvailable
+        detectedSystemVolumePercent = state.detectedSystemVolumePercent
+        lastSystemVolume = state.lastSystemVolume
+        lastOutputDeviceID = state.lastOutputDeviceID
+        currentOutputDeviceUID = state.currentOutputDeviceUID
+        currentOutputDeviceName = state.currentOutputDeviceName
+        initialOutputDeviceResolved = state.initialOutputDeviceResolved
+    }
+
+    private func makeVelocityLayerChangedCallback() -> (String) -> Void {
+        { [weak self] layer in
+            Task { @MainActor [weak self] in
+                self?.liveVelocityLayer = layer
+            }
+        }
+    }
+
+    private func makeManifestValidationCallback() -> (String, [String]) -> Void {
+        { [weak self] summary, issues in
+            Task { @MainActor [weak self] in
+                self?.manifestValidationSummary = summary
+                self?.manifestValidationIssues = issues
+            }
+        }
+    }
+
+    private func makeAudioDiagnosticCallback() -> (String) -> Void {
+        { [weak self] message in
+            Task { @MainActor [weak self] in
+                self?.recordDebug("Audio: \(message)")
+            }
+        }
+    }
+
+    private func makeKeyboardInputRuntimeDependencies() -> KeyboardInputRuntimeDependencies {
+        KeyboardInputRuntimeDependencies(
+            trackTypingHit: { [weak self] in
+                self?.trackTypingHit()
+            },
+            playDown: { [weak self] keyCode, isAutorepeat in
+                self?.soundEngine.playDown(for: keyCode, autorepeat: isAutorepeat)
+            },
+            playUp: { [weak self] keyCode in
+                self?.soundEngine.playUp(for: keyCode)
+            }
+        )
+    }
+
+    private func makeStressTestProgressCallback() -> (Double) -> Void {
+        { [weak self] progress in
+            self?.stressTestProgress = progress
+        }
+    }
+
+    private func makeStressTestDownCallback() -> (Int, Bool) -> Void {
+        { [weak self] keyCode, autorepeat in
+            self?.soundEngine.playDown(for: keyCode, autorepeat: autorepeat)
+        }
+    }
+
+    private func makeStressTestUpCallback() -> (Int) -> Void {
+        { [weak self] keyCode in
+            self?.soundEngine.playUp(for: keyCode)
+        }
+    }
+
+    private func makeStressTestRouteRebuildCallback() -> () -> Void {
+        { [weak self] in
+            self?.soundEngine.handleOutputDeviceChanged()
+        }
+    }
+
+    private func makeABComparisonStateSource() -> ABComparisonStateSource {
+        ABComparisonStateSource(
+            dynamicCompensationEnabled: dynamicCompensationEnabled,
+            typingAdaptiveEnabled: typingAdaptiveEnabled,
+            limiterEnabled: limiterEnabled,
+            compensationStrength: compensationStrength,
+            volume: volume,
+            pressLevel: pressLevel,
+            releaseLevel: releaseLevel,
+            spaceLevel: spaceLevel,
+            lastSystemVolume: lastSystemVolume
+        )
+    }
+
+    private func makeABComparisonScenarioDependencies(
+        baseline: ABComparisonBaselineState
+    ) -> ABComparisonScenarioDependencies {
+        ABComparisonScenarioDependencies(
+            applyBaselineForBurst: { [weak self] in
+                guard let self else { return }
+                self.volume = baseline.volume
+                self.pressLevel = baseline.pressLevel
+                self.releaseLevel = baseline.releaseLevel
+                self.spaceLevel = baseline.spaceLevel
+                self.compensationStrength = baseline.compensationStrength
+                self.lastSystemVolume = baseline.lastSystemVolume
+            },
+            setDynamicCompensationEnabled: { [weak self] value in
+                self?.dynamicCompensationEnabled = value
+            },
+            setLimiterEnabled: { [weak self] value in
+                self?.limiterEnabled = value
+            },
+            setTypingAdaptiveEnabled: { [weak self] value in
+                self?.typingAdaptiveEnabled = value
+            },
+            updateDynamicCompensation: { [weak self] in
+                self?.updateDynamicCompensation()
+            },
+            playStressBurst: { [weak self] in
+                await self?.playABStressBurst()
+            },
+            playTestSound: { [weak self] in
+                self?.playTestSound()
+            },
+            sleep: { nanoseconds in
+                try? await Task.sleep(nanoseconds: nanoseconds)
+            }
+        )
+    }
+
+    private func restoreABComparisonState(_ state: ABComparisonRestoreState) {
+        dynamicCompensationEnabled = state.dynamicCompensationEnabled
+        typingAdaptiveEnabled = state.typingAdaptiveEnabled
+        limiterEnabled = state.limiterEnabled
+        compensationStrength = state.compensationStrength
+        volume = state.volume
+        pressLevel = state.pressLevel
+        releaseLevel = state.releaseLevel
+        spaceLevel = state.spaceLevel
+        lastSystemVolume = state.lastSystemVolume
+        updateDynamicCompensation()
+        isABPlaying = false
+    }
+
+    private func makeDiagnosticsExportRuntimeSource() -> DiagnosticsExportRuntimeSource {
+        DiagnosticsExportRuntimeSource(
+            outputDeviceName: currentOutputDeviceName,
+            outputUID: currentOutputDeviceUID,
+            accessibilityGranted: accessibilityGranted,
+            inputMonitoringGranted: inputMonitoringGranted,
+            capturingKeyboard: capturingKeyboard,
+            systemVolumeAvailable: detectedSystemVolumeAvailable,
+            systemVolumePercent: detectedSystemVolumePercent,
+            runtimeSettings: snapshotSummaryLines(),
+            stressTestStatus: stressTestStatus
+        )
+    }
+
+    private func makeAccessRecoveryResetDependencies() -> AccessRecoveryResetDependencies {
+        AccessRecoveryResetDependencies(
+            resolveBundleID: { [weak self] in
+                self?.appMetadataProvider.resolveBundleIdentifier()
+            },
+            resetTCC: { [weak self] service, bundleID in
+                self?.permissionsController.resetTCC(service: service, bundleID: bundleID)
+            },
+            openAccessibilitySettings: { [weak self] in
+                self?.openAccessibilitySettings()
+            },
+            openInputMonitoringSettings: { [weak self] in
+                self?.openInputMonitoringSettings()
+            },
+            schedulePostResetRefresh: { [weak self] work in
+                self?.accessRecoveryCoordinator.schedulePostResetRefresh(work)
+            },
+            refreshStatus: { [weak self] in
+                self?.refreshAccessibilityStatus(promptIfNeeded: false)
+            }
+        )
+    }
+
+    private func makeAccessRecoveryWizardDependencies() -> AccessRecoveryWizardDependencies {
+        AccessRecoveryWizardDependencies(
+            runResetFlow: { [weak self] in
+                self?.resetPrivacyPermissions()
+            },
+            setHint: { [weak self] hint in
+                self?.accessActionHint = hint
+            },
+            scheduleWizard: { [weak self] open, setHint, restart in
+                self?.accessRecoveryCoordinator.scheduleWizard(
+                    openSettings: open,
+                    setHint: setHint,
+                    restart: restart
+                )
+            },
+            openSettings: { [weak self] in
+                self?.openAccessibilitySettings()
+                self?.openInputMonitoringSettings()
+            },
+            restartApplication: { [weak self] in
+                self?.restartApplication()
+            }
+        )
+    }
+
+    private func makeOutputDeviceTransitionRuntimeDependencies() -> OutputDeviceTransitionRuntimeDependencies {
+        OutputDeviceTransitionRuntimeDependencies(
+            saveSnapshot: { [weak self] uid in
+                self?.persistSnapshot(for: uid)
+            },
+            loadBoost: { [weak self] uid in
+                guard let self else { return 1.0 }
+                return self.perDeviceSnapshotRuntime.loadBoost(deviceUID: uid)
+            },
+            rebuildAudioGraph: { [weak self] in
+                self?.soundEngine.handleOutputDeviceChanged()
+            },
+            restoreSnapshot: { [weak self] uid in
+                self?.restoreSnapshot(for: uid) ?? false
+            },
+            applyAutoPreset: { [weak self] uid, name in
+                self?.applyAutoOutputPresetIfNeeded(deviceUID: uid, deviceName: name)
+            }
+        )
+    }
+
+    private func makeKeyboardCaptureStartDependencies() -> KeyboardCaptureStartDependencies {
+        KeyboardCaptureStartDependencies(
+            refreshStatus: { [weak self] in
+                self?.permissionsController.refreshStatus(promptIfNeeded: false) ?? PermissionsStatus(
+                    accessibilityGranted: false,
+                    inputMonitoringGranted: false
+                )
+            },
+            startAudio: { [weak self] in
+                self?.soundEngine.startIfNeeded()
+            },
+            startInputCapture: { [weak self] in
+                self?.inputMonitor.start() ?? false
+            }
+        )
+    }
+
+    private func makeKeyboardCaptureRefreshDependencies() -> KeyboardCaptureRefreshDependencies {
+        KeyboardCaptureRefreshDependencies(
+            refreshStatus: { [weak self] promptIfNeeded in
+                self?.permissionsController.refreshStatus(promptIfNeeded: promptIfNeeded) ?? PermissionsStatus(
+                    accessibilityGranted: false,
+                    inputMonitoringGranted: false
+                )
+            },
+            startAudio: { [weak self] in
+                self?.soundEngine.startIfNeeded()
+            },
+            startInputCapture: { [weak self] in
+                self?.inputMonitor.start() ?? false
+            }
+        )
+    }
+
+    private func makeKeyboardCaptureStopDependencies() -> KeyboardCaptureStopDependencies {
+        KeyboardCaptureStopDependencies(
+            stopInputCapture: { [weak self] in
+                self?.inputMonitor.stop()
+            },
+            stopAudio: { [weak self] in
+                self?.soundEngine.stop()
+            }
+        )
+    }
+
+    private func makeUpdateCheckRuntimeDependencies() -> UpdateCheckRuntimeDependencies {
+        UpdateCheckRuntimeDependencies(
+            setInProgress: { [weak self] value in
+                self?.updateCheckInProgress = value
+            },
+            setStatusText: { [weak self] value in
+                self?.updateStatusText = value
+            },
+            recordDebug: { [weak self] message in
+                self?.recordDebug(message)
+            },
+            runFlow: { [weak self] version, build in
+                await self?.updateCheckFlowCoordinator.run(currentVersion: version, currentBuild: build)
+                    ?? UpdateCheckPresentation(statusText: "Ошибка проверки обновлений", debugMessage: "Update flow unavailable", action: nil)
+            },
+            executeAction: { [weak self] action in
+                guard let self else { return }
+                UpdateCheckActionExecutor.execute(action, alertPresenter: self.alertPresenter, urlOpener: self.urlOpener)
+            }
+        )
+    }
+
+    private func makeSystemAudioPollRuntimeDependencies() -> SystemAudioPollRuntimeDependencies {
+        SystemAudioPollRuntimeDependencies(
+            handleOutputDeviceTransition: { [weak self] result in
+                self?.handleOutputDeviceTransition(result: result)
+            },
+            rebuildAudioGraphAfterAvailabilityChange: { [weak self] in
+                self?.soundEngine.handleOutputDeviceChanged()
+            },
+            updateDynamicCompensation: { [weak self] in
+                self?.updateDynamicCompensation()
+            }
+        )
+    }
+
+    private func makeFailSafeRuntimeDependencies() -> FailSafeRuntimeDependencies {
+        FailSafeRuntimeDependencies(
+            resetStuckPollIfNeeded: { [weak self] now, threshold in
+                self?.systemAudioMonitor.resetStuckPollIfNeeded(now: now, threshold: threshold) ?? false
+            },
+            recoverKeyboardCaptureIfNeeded: { [weak self] isEnabled, accessibilityGranted, inputMonitoringGranted, currentlyCapturingKeyboard in
+                self?.inputMonitor.recoverIfNeeded(
+                    isEnabled: isEnabled,
+                    accessibilityGranted: accessibilityGranted,
+                    inputMonitoringGranted: inputMonitoringGranted,
+                    currentlyCapturing: currentlyCapturingKeyboard
+                ) ?? currentlyCapturingKeyboard
+            },
+            runAudioEngineFailSafe: { [weak self] in
+                self?.soundEngine.runFailSafeTick()
+            }
+        )
     }
 
 }

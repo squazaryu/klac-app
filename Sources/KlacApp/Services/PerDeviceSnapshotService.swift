@@ -76,7 +76,7 @@ struct PerDeviceSnapshotService {
         snapshots[deviceUID] != nil
     }
 
-    mutating func restoreSnapshot(deviceUID: String, apply: (DeviceSoundStateDTO) -> Void) -> Bool {
+    func restoreSnapshot(deviceUID: String, apply: (DeviceSoundStateDTO) -> Void) -> Bool {
         guard let snapshot = snapshots[deviceUID] else { return false }
         let dto = DeviceSoundStateDTO(
             volume: snapshot.volume.clamped(to: 0.0 ... 1.0),

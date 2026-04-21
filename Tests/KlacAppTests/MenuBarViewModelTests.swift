@@ -1,4 +1,5 @@
 #if canImport(XCTest)
+import Combine
 import XCTest
 @testable import KlacApp
 
@@ -52,7 +53,7 @@ final class MenuBarViewModelTests: XCTestCase {
 
         service.selectedProfile = .mechvibesEGCrystalPurple
         service.appearanceMode = .light
-        service.changePublisher.send()
+        service.emitChange()
 
         for _ in 0 ..< 20 {
             await Task.yield()
@@ -92,7 +93,8 @@ final class MenuBarViewModelTests: XCTestCase {
 
 @MainActor
 private final class MockMenuBarService: MenuBarServiceProtocol {
-    let changePublisher = ObservableObjectPublisher()
+    private let changeSubject = PassthroughSubject<Void, Never>()
+    var changePublisher: AnyPublisher<Void, Never> { changeSubject.eraseToAnyPublisher() }
 
     var isEnabled: Bool = true
     var capturingKeyboard: Bool = false
@@ -130,6 +132,10 @@ private final class MockMenuBarService: MenuBarServiceProtocol {
 
     func runAccessRecoveryWizard() {
         runRecoveryCalls += 1
+    }
+
+    func emitChange() {
+        changeSubject.send(())
     }
 }
 
