@@ -10,7 +10,7 @@ final class DiagnosticsCoordinatorTests: XCTestCase {
         let logService = DebugLogService()
         _ = logService.append(message: "line", timestamp: "2026-01-01T00:00:00Z")
         let snapshot = DiagnosticsRuntimeSnapshot(
-            appVersion: "2.1.4",
+            appVersion: "2.1.6",
             buildNumber: "100",
             buildTag: "dev",
             osVersion: "macOS",
@@ -28,7 +28,7 @@ final class DiagnosticsCoordinatorTests: XCTestCase {
         let report = coordinator.buildReport(runtimeSnapshot: snapshot, debugLogService: logService)
 
         XCTAssertTrue(report.contains("Klac Debug Report"))
-        XCTAssertTrue(report.contains("App version: 2.1.4"))
+        XCTAssertTrue(report.contains("App version: 2.1.6"))
         XCTAssertTrue(report.contains("Output device: Headphones"))
         XCTAssertTrue(report.contains("Runtime settings:"))
         XCTAssertTrue(report.contains("- profile=kalih"))

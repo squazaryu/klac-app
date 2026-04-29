@@ -5,7 +5,7 @@ import XCTest
 final class DiagnosticsRuntimeSnapshotFactoryTests: XCTestCase {
     func testMakeSnapshotUsesMetadataProviderAndContext() {
         let provider = MockMetadataProvider(
-            appVersion: "2.1.4",
+            appVersion: "2.1.6",
             buildNumber: "42",
             buildTag: "b42-dev",
             osVersion: "macOS 15"
@@ -25,7 +25,7 @@ final class DiagnosticsRuntimeSnapshotFactoryTests: XCTestCase {
 
         let snapshot = factory.makeSnapshot(context: context)
 
-        XCTAssertEqual(snapshot.appVersion, "2.1.4")
+        XCTAssertEqual(snapshot.appVersion, "2.1.6")
         XCTAssertEqual(snapshot.buildNumber, "42")
         XCTAssertEqual(snapshot.buildTag, "b42-dev")
         XCTAssertEqual(snapshot.osVersion, "macOS 15")

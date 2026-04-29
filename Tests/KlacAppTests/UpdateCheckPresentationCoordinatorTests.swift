@@ -5,29 +5,29 @@ import XCTest
 final class UpdateCheckPresentationCoordinatorTests: XCTestCase {
     func testUpToDatePresentationContainsExpectedTextsAndAlert() {
         let presentation = UpdateCheckPresentationCoordinator.presentable(
-            result: .upToDate(currentVersion: "2.1.4"),
-            currentVersion: "2.1.4"
+            result: .upToDate(currentVersion: "2.1.6"),
+            currentVersion: "2.1.6"
         )
 
-        XCTAssertEqual(presentation.statusText, "У вас актуальная версия (2.1.4).")
-        XCTAssertEqual(presentation.debugMessage, "Update check: already up to date (2.1.4)")
+        XCTAssertEqual(presentation.statusText, "У вас актуальная версия (2.1.6).")
+        XCTAssertEqual(presentation.debugMessage, "Update check: already up to date (2.1.6)")
         XCTAssertEqual(
             presentation.action,
             .showInfoAlert(
                 title: "Обновлений нет",
-                message: "Текущая версия 2.1.4 уже актуальна."
+                message: "Текущая версия 2.1.6 уже актуальна."
             )
         )
     }
 
     func testUpdateAvailablePresentationOpensRelease() {
-        let url = URL(string: "https://github.com/squazaryu/klac-app/releases/tag/v2.1.5")!
+        let url = URL(string: "https://github.com/squazaryu/klac-app/releases/tag/v2.1.7")!
         let presentation = UpdateCheckPresentationCoordinator.presentable(
-            result: .updateAvailable(latestVersion: "2.1.5", releaseURL: url),
-            currentVersion: "2.1.4"
+            result: .updateAvailable(latestVersion: "2.1.7", releaseURL: url),
+            currentVersion: "2.1.6"
         )
 
-        XCTAssertEqual(presentation.statusText, "Найдена версия 2.1.5. Открываю релиз...")
+        XCTAssertEqual(presentation.statusText, "Найдена версия 2.1.7. Открываю релиз...")
         XCTAssertEqual(presentation.action, .openRelease(url: url))
     }
 

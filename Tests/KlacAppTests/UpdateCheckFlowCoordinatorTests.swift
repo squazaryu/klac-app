@@ -8,7 +8,7 @@ final class UpdateCheckFlowCoordinatorTests: XCTestCase {
         let checker = MockUpdateChecker(result: .updateAvailable(latestVersion: "2.2.0", releaseURL: url))
         let coordinator = UpdateCheckFlowCoordinator(updateChecker: checker)
 
-        let presentation = await coordinator.run(currentVersion: "2.1.4", currentBuild: 1)
+        let presentation = await coordinator.run(currentVersion: "2.1.6", currentBuild: 1)
 
         XCTAssertEqual(presentation.statusText, "Найдена версия 2.2.0. Открываю релиз...")
         XCTAssertEqual(presentation.action, .openRelease(url: url))
@@ -18,7 +18,7 @@ final class UpdateCheckFlowCoordinatorTests: XCTestCase {
         let checker = MockUpdateChecker(error: MockError.network)
         let coordinator = UpdateCheckFlowCoordinator(updateChecker: checker)
 
-        let presentation = await coordinator.run(currentVersion: "2.1.4", currentBuild: 1)
+        let presentation = await coordinator.run(currentVersion: "2.1.6", currentBuild: 1)
 
         XCTAssertEqual(presentation.statusText, "Ошибка обновления: network")
         XCTAssertEqual(

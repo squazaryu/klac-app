@@ -218,6 +218,85 @@ final class KeyboardSoundServiceFacadeTests: XCTestCase {
         XCTAssertEqual(permissions.resetCalls[1].bundleID, "com.example.klac")
     }
 
+    func testProfileSwitchRestoresPerProfileSnapshotValues() {
+        let service = makeService()
+
+        service.selectedProfile = .kalihBoxWhite
+        service.volume = 0.41
+        service.playKeyUp = false
+        service.stackDensity = 0.63
+
+        service.selectedProfile = .mechvibesBoxJade
+        service.volume = 0.77
+        service.playKeyUp = true
+        service.stackDensity = 0.22
+
+        service.selectedProfile = .kalihBoxWhite
+        XCTAssertEqual(service.volume, 0.41, accuracy: 0.0001)
+        XCTAssertEqual(service.playKeyUp, false)
+        XCTAssertEqual(service.stackDensity, 0.63, accuracy: 0.0001)
+
+        service.selectedProfile = .mechvibesBoxJade
+        XCTAssertEqual(service.volume, 0.77, accuracy: 0.0001)
+        XCTAssertEqual(service.playKeyUp, true)
+        XCTAssertEqual(service.stackDensity, 0.22, accuracy: 0.0001)
+    }
+
+    func testProfileSnapshotSurvivesRestartAndRestoresAfterSwitch() {
+        let suite = "klac.tests.facade.profile.snapshot.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        let store = SettingsStore(defaults: defaults)
+        let repository = SettingsRepository(store: store)
+
+        let service = KeyboardSoundService(
+            inputMonitoring: MockKeyboardInputMonitoring(),
+            permissionsController: MockPermissionsController(),
+            launchAtLoginController: MockLaunchAtLoginController(),
+            appRestartController: MockAppRestartController(),
+            profileSettingsTransferCoordinator: MockProfileTransferCoordinator(),
+            debugLogExportCoordinator: MockDebugLogExportCoordinator(),
+            settingsStore: store,
+            settingsRepository: repository,
+            systemAudioMonitor: MockSystemAudioMonitor(),
+            alertPresenter: MockAlertPresenter(),
+            urlOpener: MockURLOpener(),
+            appMetadataProvider: MockAppMetadataProvider(bundleID: "com.test.klac"),
+            updateCheckFlowCoordinator: MockUpdateCheckFlowCoordinator()
+        )
+
+        service.selectedProfile = .mechvibesBoxJade
+        service.volume = 0.68
+        service.playKeyUp = false
+        service.stackDensity = 0.59
+
+        service.selectedProfile = .kalihBoxWhite
+        service.volume = 0.31
+        service.playKeyUp = true
+        service.stackDensity = 0.18
+
+        let restarted = KeyboardSoundService(
+            inputMonitoring: MockKeyboardInputMonitoring(),
+            permissionsController: MockPermissionsController(),
+            launchAtLoginController: MockLaunchAtLoginController(),
+            appRestartController: MockAppRestartController(),
+            profileSettingsTransferCoordinator: MockProfileTransferCoordinator(),
+            debugLogExportCoordinator: MockDebugLogExportCoordinator(),
+            settingsStore: store,
+            settingsRepository: repository,
+            systemAudioMonitor: MockSystemAudioMonitor(),
+            alertPresenter: MockAlertPresenter(),
+            urlOpener: MockURLOpener(),
+            appMetadataProvider: MockAppMetadataProvider(bundleID: "com.test.klac"),
+            updateCheckFlowCoordinator: MockUpdateCheckFlowCoordinator()
+        )
+
+        restarted.selectedProfile = .mechvibesBoxJade
+        XCTAssertEqual(restarted.volume, 0.68, accuracy: 0.0001)
+        XCTAssertEqual(restarted.playKeyUp, false)
+        XCTAssertEqual(restarted.stackDensity, 0.59, accuracy: 0.0001)
+    }
+
     func testRunAccessRecoveryWizardTriggersResetAndRestartFlow() {
         let permissions = MockPermissionsController()
         let restart = MockAppRestartController()
@@ -389,7 +468,7 @@ private struct MockURLOpener: URLOpening {
 
 private struct MockAppMetadataProvider: AppMetadataProviding {
     let bundleID: String?
-    var version: String = "2.1.4"
+    var version: String = "2.1.6"
     var build: Int = 214
 
     func currentAppVersion() -> String { version }

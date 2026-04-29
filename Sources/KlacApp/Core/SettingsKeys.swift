@@ -44,4 +44,5 @@ enum SettingsKeys {
     static let perDeviceSoundProfileEnabled = "settings.perDeviceSoundProfileEnabled"
     static let appearanceMode = "settings.appearanceMode"
     static let perDeviceSoundSnapshots = "settings.perDeviceSoundSnapshots"
+    static let perProfileSoundSnapshots = "settings.perProfileSoundSnapshots"
 }

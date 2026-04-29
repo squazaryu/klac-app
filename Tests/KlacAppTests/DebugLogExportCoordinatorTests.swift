@@ -44,7 +44,7 @@ final class DebugLogExportCoordinatorTests: XCTestCase {
 
     private func makeSnapshot() -> DiagnosticsRuntimeSnapshot {
         DiagnosticsRuntimeSnapshot(
-            appVersion: "2.1.4",
+            appVersion: "2.1.6",
             buildNumber: "1",
             buildTag: "dev",
             osVersion: "macOS",

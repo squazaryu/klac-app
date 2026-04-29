@@ -33,7 +33,7 @@ final class KeyboardSoundService: ObservableObject {
         }
     }
     @Published var playKeyUp = true {
-        didSet { syncSettingFlag(playKeyUp, key: SettingsKeys.playKeyUp) }
+        didSet { syncPlayKeyUp(playKeyUp) }
     }
     @Published var pressLevel: Double = 1.0 {
         didSet { syncSoundScalar(pressLevel, key: SettingsKeys.pressLevel, apply: { soundEngine.pressLevel = $0 }) }
@@ -45,7 +45,7 @@ final class KeyboardSoundService: ObservableObject {
         didSet { syncSoundScalar(spaceLevel, key: SettingsKeys.spaceLevel, apply: { soundEngine.spaceLevel = $0 }) }
     }
     @Published var selectedProfile: SoundProfile = .kalihBoxWhite {
-        didSet { syncSelectedProfile(selectedProfile) }
+        didSet { syncSelectedProfile(from: oldValue, to: selectedProfile) }
     }
     @Published var autoProfileTuningEnabled = true {
         didSet { syncSettingFlag(autoProfileTuningEnabled, key: SettingsKeys.autoProfileTuningEnabled) }
@@ -222,6 +222,7 @@ final class KeyboardSoundService: ObservableObject {
     private let settingsRepository: SettingsRepository
     private let updateCheckFlowCoordinator: any UpdateCheckFlowCoordinating
     private let debugLogService = DebugLogService(capacity: 1200)
+    private let persistentDebugLogService = PersistentDebugLogService()
     private let diagnosticsSnapshotFactory = DiagnosticsRuntimeSnapshotFactory()
     private let profileSettingsTransferCoordinator: any ProfileSettingsTransferCoordinating
     private let debugLogExportCoordinator: any DebugLogExportCoordinating
@@ -236,6 +237,8 @@ final class KeyboardSoundService: ObservableObject {
     }
     private var runtimeState = RuntimeState()
     private var perDeviceSnapshotRuntime: PerDeviceSnapshotRuntimeCoordinator
+    private var perProfileSoundSnapshots: [String: ProfileSoundSnapshot]
+    private var isApplyingProfileSnapshot = false
     private var failSafeTimer: Timer?
     private let typingMetricsService = TypingMetricsService()
     private var appWillTerminateObserver: NSObjectProtocol?
@@ -329,6 +332,10 @@ final class KeyboardSoundService: ObservableObject {
             boosts: persistedState.outputDeviceBoosts
         )
         perDeviceSnapshotRuntime = PerDeviceSnapshotRuntimeCoordinator(snapshotService: snapshotService)
+        perProfileSoundSnapshots = self.settingsStore.decode(
+            [String: ProfileSoundSnapshot].self,
+            forKey: SettingsKeys.perProfileSoundSnapshots
+        ) ?? [:]
         hasPersistedPrimarySettings = persistedState.hasPrimaryPersistedSettings
         restorePersistedState(persistedState)
         configureSoundEngine()
@@ -336,6 +343,7 @@ final class KeyboardSoundService: ObservableObject {
         configureEventTap()
         updateLaunchAtLogin()
         registerTerminationObserver()
+        initializePersistentDiagnosticsSession()
     }
 
     private func restorePersistedState(_ state: SettingsRepository.State) {
@@ -444,8 +452,19 @@ final class KeyboardSoundService: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
+                self?.persistentDebugLogService.markGracefulShutdown()
                 self?.persistPerDeviceSnapshotIfNeeded()
             }
+        }
+    }
+
+    private func initializePersistentDiagnosticsSession() {
+        let hadUngracefulExit = persistentDebugLogService.beginSession(
+            appVersion: appMetadataProvider.currentAppVersion(),
+            buildNumber: appMetadataProvider.currentAppBuildNumber()
+        )
+        if hadUngracefulExit {
+            recordDebug("Detected ungraceful previous shutdown (possible crash/force-close).")
         }
     }
 
@@ -460,6 +479,7 @@ final class KeyboardSoundService: ObservableObject {
         settingsStore.set(value, forKey: key)
         apply(Float(value))
         persistPerDeviceSnapshotIfNeeded()
+        persistCurrentProfileSnapshotIfNeeded()
     }
 
     private func syncSettingFlag(_ value: Bool, key: String, after: (() -> Void)? = nil) {
@@ -484,12 +504,19 @@ final class KeyboardSoundService: ObservableObject {
         apply(Float(clamped))
         afterApply?()
         persistPerDeviceSnapshotIfNeeded()
+        persistCurrentProfileSnapshotIfNeeded()
     }
 
     private func syncSoundFlag(_ value: Bool, key: String, apply: (Bool) -> Void) {
         settingsStore.set(value, forKey: key)
         apply(value)
         persistPerDeviceSnapshotIfNeeded()
+        persistCurrentProfileSnapshotIfNeeded()
+    }
+
+    private func syncPlayKeyUp(_ enabled: Bool) {
+        syncSettingFlag(enabled, key: SettingsKeys.playKeyUp)
+        persistCurrentProfileSnapshotIfNeeded()
     }
 
     private func syncCompensationScalar(_ value: Double, key: String, clampedTo range: ClosedRange<Double>? = nil) {
@@ -506,6 +533,7 @@ final class KeyboardSoundService: ObservableObject {
     private func syncLayerThreshold(_ value: Double, key: String) {
         settingsStore.set(value, forKey: key)
         applyLayerThresholds()
+        persistCurrentProfileSnapshotIfNeeded()
     }
 
     private func syncDynamicCompensationFlag(_ enabled: Bool, key: String) {
@@ -533,9 +561,15 @@ final class KeyboardSoundService: ObservableObject {
         updateLaunchAtLogin()
     }
 
-    private func syncSelectedProfile(_ profile: SoundProfile) {
+    private func syncSelectedProfile(from previousProfile: SoundProfile, to profile: SoundProfile) {
+        if !isRestoringPersistedState, !isApplyingProfileSnapshot, previousProfile != profile {
+            persistProfileSnapshot(for: previousProfile)
+        }
+
         soundEngine.setProfile(profile)
-        if !isRestoringPersistedState, autoProfileTuningEnabled {
+
+        let restoredFromProfileSnapshot = restoreProfileSnapshot(for: profile)
+        if !restoredFromProfileSnapshot, !isRestoringPersistedState, autoProfileTuningEnabled {
             applyProfileSoundPreset(for: profile)
         }
         if !isRestoringPersistedState {
@@ -811,6 +845,7 @@ final class KeyboardSoundService: ObservableObject {
 
     func clearDebugLog() {
         debugLogService.clear()
+        persistentDebugLogService.clearLogFile()
         debugLogPreview = "Лог очищен."
         recordDebug("Debug log cleared")
     }
@@ -1105,7 +1140,8 @@ final class KeyboardSoundService: ObservableObject {
 
     private func recordDebug(_ message: String) {
         let timestamp = DiagnosticsTimestampProvider.debugTimestamp()
-        _ = debugLogService.append(message: message, timestamp: timestamp)
+        let line = debugLogService.append(message: message, timestamp: timestamp)
+        persistentDebugLogService.append(line)
         debugLogPreview = debugLogService.preview(maxLines: 180)
         NSLog("KlacDebug: \(message)")
     }
@@ -1121,6 +1157,68 @@ final class KeyboardSoundService: ObservableObject {
 
     private func persistPerDeviceSnapshotIfNeeded() {
         persistSnapshot(for: currentOutputDeviceUID)
+    }
+
+    private func persistCurrentProfileSnapshotIfNeeded() {
+        guard !isRestoringPersistedState, !isApplyingProfileSnapshot else { return }
+        persistProfileSnapshot(for: selectedProfile)
+    }
+
+    private func persistProfileSnapshot(for profile: SoundProfile) {
+        perProfileSoundSnapshots[profile.rawValue] = currentProfileSoundSnapshot()
+        settingsStore.encode(perProfileSoundSnapshots, forKey: SettingsKeys.perProfileSoundSnapshots)
+    }
+
+    private func currentProfileSoundSnapshot() -> ProfileSoundSnapshot {
+        ProfileSoundSnapshot(
+            playKeyUp: playKeyUp,
+            volume: volume,
+            variation: variation,
+            pitchVariation: pitchVariation,
+            pressLevel: pressLevel,
+            releaseLevel: releaseLevel,
+            spaceLevel: spaceLevel,
+            stackModeEnabled: stackModeEnabled,
+            stackDensity: stackDensity,
+            layerThresholdSlam: layerThresholdSlam,
+            layerThresholdHard: layerThresholdHard,
+            layerThresholdMedium: layerThresholdMedium,
+            limiterEnabled: limiterEnabled,
+            limiterDrive: limiterDrive,
+            minInterKeyGapMs: minInterKeyGapMs,
+            releaseDuckingStrength: releaseDuckingStrength,
+            releaseDuckingWindowMs: releaseDuckingWindowMs,
+            releaseTailTightness: releaseTailTightness
+        )
+    }
+
+    private func restoreProfileSnapshot(for profile: SoundProfile) -> Bool {
+        guard let snapshot = perProfileSoundSnapshots[profile.rawValue] else { return false }
+        isApplyingProfileSnapshot = true
+        defer { isApplyingProfileSnapshot = false }
+        applyProfileSoundSnapshot(snapshot)
+        return true
+    }
+
+    private func applyProfileSoundSnapshot(_ snapshot: ProfileSoundSnapshot) {
+        playKeyUp = snapshot.playKeyUp
+        volume = snapshot.volume.clamped(to: 0.0 ... 1.0)
+        variation = snapshot.variation.clamped(to: 0.0 ... 1.0)
+        pitchVariation = snapshot.pitchVariation.clamped(to: 0.0 ... 0.6)
+        pressLevel = snapshot.pressLevel.clamped(to: 0.2 ... 1.6)
+        releaseLevel = snapshot.releaseLevel.clamped(to: 0.1 ... 1.4)
+        spaceLevel = snapshot.spaceLevel.clamped(to: 0.2 ... 1.8)
+        stackModeEnabled = snapshot.stackModeEnabled
+        stackDensity = snapshot.stackDensity.clamped(to: 0.0 ... 1.0)
+        layerThresholdSlam = snapshot.layerThresholdSlam.clamped(to: 0.010 ... 0.120)
+        layerThresholdHard = snapshot.layerThresholdHard.clamped(to: 0.025 ... 0.180)
+        layerThresholdMedium = snapshot.layerThresholdMedium.clamped(to: 0.040 ... 0.260)
+        limiterEnabled = snapshot.limiterEnabled
+        limiterDrive = snapshot.limiterDrive.clamped(to: 0.6 ... 2.0)
+        minInterKeyGapMs = snapshot.minInterKeyGapMs.clamped(to: 0 ... 45)
+        releaseDuckingStrength = snapshot.releaseDuckingStrength.clamped(to: 0 ... 1)
+        releaseDuckingWindowMs = snapshot.releaseDuckingWindowMs.clamped(to: 20 ... 180)
+        releaseTailTightness = snapshot.releaseTailTightness.clamped(to: 0 ... 1)
     }
 
     private func currentDeviceStateSource() -> DeviceSoundStateSource {

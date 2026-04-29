@@ -69,7 +69,7 @@ final class AdvancedSettingsViewModel: ObservableObject {
         )
     }
 
-    func binding<T: RawRepresentable>(_ setting: AdvancedEnumSetting<T>) -> Binding<T> {
+    func binding<T: RawRepresentable & CaseIterable>(_ setting: AdvancedEnumSetting<T>) -> Binding<T> {
         Binding(
             get: { [service] in
                 service.enumValue(setting)

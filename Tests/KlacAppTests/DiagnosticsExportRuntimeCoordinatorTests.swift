@@ -29,7 +29,7 @@ final class DiagnosticsExportRuntimeCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(result, .success(path: "/tmp/diag.log"))
         XCTAssertEqual(exporter.calls, 1)
-        XCTAssertEqual(exporter.lastSnapshot?.appVersion, "2.1.4")
+        XCTAssertEqual(exporter.lastSnapshot?.appVersion, "2.1.6")
         XCTAssertEqual(exporter.lastSnapshot?.buildNumber, "202604210001")
         XCTAssertEqual(exporter.lastSnapshot?.outputDeviceName, "USB DAC")
         XCTAssertEqual(exporter.lastSnapshot?.systemVolumePercent, 52, accuracy: 0.0001)
@@ -38,7 +38,7 @@ final class DiagnosticsExportRuntimeCoordinatorTests: XCTestCase {
 }
 
 private struct MockBuildMetadata: AppBuildMetadataProviding {
-    func appVersion() -> String { "2.1.4" }
+    func appVersion() -> String { "2.1.6" }
     func buildNumber() -> String { "202604210001" }
     func buildTag() -> String { "dev" }
     func osVersion() -> String { "macOS-test" }

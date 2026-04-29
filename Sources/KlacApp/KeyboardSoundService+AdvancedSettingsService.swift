@@ -98,7 +98,7 @@ extension KeyboardSoundService: AdvancedSettingsServiceProtocol {
         }
     }
 
-    func enumValue<T>(_ setting: AdvancedEnumSetting<T>) -> T where T: RawRepresentable {
+    func enumValue<T>(_ setting: AdvancedEnumSetting<T>) -> T where T: RawRepresentable & CaseIterable {
         switch setting.key {
         case .abFeature:
             return castEnum(abFeature, as: T.self, context: "abFeature")
@@ -111,7 +111,7 @@ extension KeyboardSoundService: AdvancedSettingsServiceProtocol {
         }
     }
 
-    func setEnum<T>(_ value: T, for setting: AdvancedEnumSetting<T>) where T: RawRepresentable {
+    func setEnum<T>(_ value: T, for setting: AdvancedEnumSetting<T>) where T: RawRepresentable & CaseIterable {
         switch setting.key {
         case .abFeature:
             guard let typed = value as? KlacABFeature else { return }
@@ -128,10 +128,20 @@ extension KeyboardSoundService: AdvancedSettingsServiceProtocol {
         }
     }
 
-    private func castEnum<T: RawRepresentable>(_ value: some RawRepresentable, as type: T.Type, context: String) -> T {
-        guard let typed = value as? T else {
-            fatalError("Advanced enum type mismatch for \(context)")
+    private func castEnum<T: RawRepresentable & CaseIterable>(_ value: some RawRepresentable, as type: T.Type, context: String) -> T {
+        if let typed = value as? T {
+            return typed
         }
-        return typed
+
+        NSLog("KlacWarning: Advanced enum type mismatch for \(context). Applying safe fallback.")
+        return fallbackEnumValue(type)
+    }
+
+    private func fallbackEnumValue<T: RawRepresentable & CaseIterable>(_ type: T.Type) -> T {
+        if let value = KlacABFeature.core as? T { return value }
+        if let value = KlacLevelTuningMode.curve as? T { return value }
+        if let value = KlacOutputPresetMode.auto as? T { return value }
+        if let value = KlacAppearanceMode.system as? T { return value }
+        return T.allCases.first!
     }
 }

@@ -103,7 +103,7 @@ struct ContentView: View {
     }
 
     private var appVersionCaption: String {
-        let releaseFallbackVersion = "2.1.4"
+        let releaseFallbackVersion = "2.1.6"
         let short = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)?
@@ -356,4 +356,3 @@ struct ContentView: View {
         )
     }
 }
-

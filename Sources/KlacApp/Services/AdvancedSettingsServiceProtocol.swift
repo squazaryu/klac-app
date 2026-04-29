@@ -52,7 +52,7 @@ enum AdvancedEnumKey {
     case appearanceMode
 }
 
-struct AdvancedEnumSetting<T: RawRepresentable> {
+struct AdvancedEnumSetting<T: RawRepresentable & CaseIterable> {
     let key: AdvancedEnumKey
 }
 
@@ -82,8 +82,8 @@ protocol AdvancedSettingsServiceProtocol: AnyObject {
     func doubleValue(_ key: AdvancedDoubleSetting) -> Double
     func setDouble(_ value: Double, for key: AdvancedDoubleSetting)
 
-    func enumValue<T: RawRepresentable>(_ setting: AdvancedEnumSetting<T>) -> T
-    func setEnum<T: RawRepresentable>(_ value: T, for setting: AdvancedEnumSetting<T>)
+    func enumValue<T: RawRepresentable & CaseIterable>(_ setting: AdvancedEnumSetting<T>) -> T
+    func setEnum<T: RawRepresentable & CaseIterable>(_ value: T, for setting: AdvancedEnumSetting<T>)
 
     var profilePresetLastApplied: String { get }
     var liveDynamicGain: Double { get }
